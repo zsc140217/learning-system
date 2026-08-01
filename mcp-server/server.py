@@ -11,6 +11,7 @@ from loguru import logger
 from config import settings
 from src.bus.agent_bus import bus
 from src.agents.session_analyzer import SessionAnalyzer
+from src.agents.memory_manager import MemoryManager
 
 
 # 创建FastMCP实例
@@ -18,6 +19,7 @@ mcp = FastMCP("Learning System")
 
 # 全局Agents
 session_analyzer = None
+memory_manager = None
 
 
 # ============ MCP Tools ============
@@ -245,7 +247,7 @@ async def list_sessions() -> str:
 
 async def startup():
     """启动时执行"""
-    global session_analyzer
+    global session_analyzer, memory_manager
 
     logger.info("=" * 50)
     logger.info("Learning System MCP Server 启动中...")
@@ -259,18 +261,27 @@ async def startup():
 
     # 初始化Agents
     logger.info("⏳ Agents初始化...")
+
     session_analyzer = SessionAnalyzer("session_analyzer_001", bus)
     await session_analyzer.start()
     logger.info("✅ SessionAnalyzer 已启动")
 
+    memory_manager = MemoryManager("memory_manager_001", bus)
+    await memory_manager.start()
+    logger.info("✅ MemoryManager 已启动")
+
 
 async def shutdown():
     """关闭时执行"""
-    global session_analyzer
+    global session_analyzer, memory_manager
 
     logger.info("Learning System MCP Server 关闭中...")
 
     # 停止Agents
+    if memory_manager:
+        await memory_manager.stop()
+        logger.info("✅ MemoryManager 已停止")
+
     if session_analyzer:
         await session_analyzer.stop()
         logger.info("✅ SessionAnalyzer 已停止")
