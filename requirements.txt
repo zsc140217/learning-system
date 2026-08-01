@@ -1,0 +1,27 @@
+# Learning System Dependencies
+# 安装: pip install -r requirements.txt
+
+# ===== MCP和通信 =====
+hot-memory-mcp>=0.8.0          # Memory MCP服务器
+fastapi>=0.100.0               # Web框架
+uvicorn[standard]>=0.20.0      # ASGI服务器
+pydantic>=2.0.0                # 数据验证
+pydantic-settings>=2.0.0       # 配置管理
+
+# ===== AI和LLM =====
+anthropic>=0.40.0              # Claude API客户端
+sentence-transformers>=3.0.0   # 嵌入模型（Memory MCP依赖）
+
+# ===== 数据存储 =====
+sqlite-vec>=0.1.0              # 向量数据库（Memory MCP依赖）
+
+# ===== 工具库 =====
+click>=8.0.0                   # CLI工具
+loguru>=0.7.0                  # 日志
+rich>=13.0.0                   # 终端美化
+python-dotenv>=1.0.0           # 环境变量
+
+# ===== 测试 =====
+pytest>=7.0.0                  # 测试框架
+pytest-asyncio>=0.21.0         # 异步测试
+httpx>=0.24.0                  # HTTP客户端（测试用）
