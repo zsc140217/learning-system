@@ -10,10 +10,14 @@ from loguru import logger
 
 from config import settings
 from src.bus.agent_bus import bus
+from src.agents.session_analyzer import SessionAnalyzer
 
 
 # 创建FastMCP实例
 mcp = FastMCP("Learning System")
+
+# 全局Agents
+session_analyzer = None
 
 
 # ============ MCP Tools ============
@@ -50,20 +54,59 @@ async def analyze_session(
 
     logger.info(f"分析会话: {session_id}")
 
-    # 发布事件到总线
+    # 解析会话内容为transcript格式
+    # 简单实现：按行解析 Markdown，提取用户/助手对话
+    transcript = _parse_session_data(session_data)
+
+    # 发布session.completed事件（SessionAnalyzer会处理）
     await bus.publish({
-        "type": "session_analyze_requested",
+        "type": "session.completed",
         "session_id": session_id,
-        "data": {"content": session_data}
+        "transcript": transcript
     })
 
-    # TODO: 实际实现Session Analyzer逻辑
-    # 这里先返回模拟数据
+    # 等待SessionAnalyzer处理（实际应该订阅knowledge.extracted事件）
+    # 这里简化处理，直接返回状态
+    await asyncio.sleep(0.2)  # 给Agent时间处理
+
     return {
         "session_id": session_id,
-        "knowledge_points": [],
-        "status": "pending"
+        "status": "completed",
+        "message": "Session analysis triggered. Knowledge points will be extracted."
     }
+
+
+def _parse_session_data(session_data: str) -> list[Dict[str, str]]:
+    """
+    解析会话数据为transcript格式
+
+    Args:
+        session_data: Markdown格式的会话内容
+
+    Returns:
+        transcript列表
+    """
+    # 简单实现：按换行符分割，提取问答对
+    lines = session_data.strip().split('\n')
+    transcript = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # 识别角色标记
+        if line.startswith('User:') or line.startswith('用户:'):
+            content = line.split(':', 1)[1].strip()
+            transcript.append({"role": "user", "content": content})
+        elif line.startswith('Assistant:') or line.startswith('助手:'):
+            content = line.split(':', 1)[1].strip()
+            transcript.append({"role": "assistant", "content": content})
+        else:
+            # 无角色标记，作为assistant内容
+            transcript.append({"role": "assistant", "content": line})
+
+    return transcript
 
 
 @mcp.tool()
@@ -202,6 +245,8 @@ async def list_sessions() -> str:
 
 async def startup():
     """启动时执行"""
+    global session_analyzer
+
     logger.info("=" * 50)
     logger.info("Learning System MCP Server 启动中...")
     logger.info(f"项目根目录: {settings.project_root}")
@@ -212,13 +257,23 @@ async def startup():
     await bus.start()
     logger.info("✅ 事件总线已启动")
 
-    # TODO: 初始化Agents
+    # 初始化Agents
     logger.info("⏳ Agents初始化...")
+    session_analyzer = SessionAnalyzer("session_analyzer_001", bus)
+    await session_analyzer.start()
+    logger.info("✅ SessionAnalyzer 已启动")
 
 
 async def shutdown():
     """关闭时执行"""
+    global session_analyzer
+
     logger.info("Learning System MCP Server 关闭中...")
+
+    # 停止Agents
+    if session_analyzer:
+        await session_analyzer.stop()
+        logger.info("✅ SessionAnalyzer 已停止")
 
     # 停止事件总线
     await bus.stop()
