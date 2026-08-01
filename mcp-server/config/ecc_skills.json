@@ -1,0 +1,108 @@
+{
+  "version": "1.0",
+  "description": "Learning System的ECC Skills配置",
+  "agents": {
+    "session_analyzer": {
+      "enabled": true,
+      "primary_skills": [
+        "continuous-learning-v2"
+      ],
+      "description": "分析会话，提取instinct模式",
+      "skill_params": {
+        "continuous-learning-v2": {
+          "observer_enabled": false,
+          "min_observations": 20
+        }
+      }
+    },
+    "memory_manager": {
+      "enabled": true,
+      "primary_tools": [
+        "memory-mcp"
+      ],
+      "description": "管理知识图谱，使用Memory MCP",
+      "mcp_config": {
+        "hot_cache_size": 20,
+        "cold_storage": "sqlite",
+        "auto_promote": true
+      }
+    },
+    "project_tracker": {
+      "enabled": true,
+      "primary_skills": [
+        "codebase-onboarding"
+      ],
+      "optional_skills": [
+        "agent-architecture-audit",
+        "agent-harness-construction"
+      ],
+      "description": "追踪项目，提取技术亮点",
+      "skill_params": {
+        "codebase-onboarding": {
+          "depth": "standard",
+          "generate_claude_md": true
+        }
+      }
+    },
+    "tech_explorer": {
+      "enabled": true,
+      "primary_tools": [
+        "web_search_exa"
+      ],
+      "optional_skills": [
+        "deep-research"
+      ],
+      "description": "探索前沿技术，生成学习路径",
+      "tool_params": {
+        "web_search_exa": {
+          "num_results": 10,
+          "recency_days": 180
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "required": [
+      {
+        "name": "ECC",
+        "version": ">=2.1.0",
+        "status": "installed"
+      },
+      {
+        "name": "Memory MCP",
+        "version": ">=0.8.0",
+        "status": "installed"
+      },
+      {
+        "name": "Exa Plugin",
+        "version": "latest",
+        "status": "installed"
+      }
+    ],
+    "optional": [
+      {
+        "name": "GitHub MCP",
+        "version": "latest",
+        "status": "not_installed",
+        "purpose": "代码分析增强"
+      },
+      {
+        "name": "Context7 MCP",
+        "version": "latest",
+        "status": "not_installed",
+        "purpose": "文档查询"
+      },
+      {
+        "name": "Firecrawl MCP",
+        "version": "latest",
+        "status": "not_installed",
+        "purpose": "deep-research依赖"
+      }
+    ]
+  },
+  "test_project": {
+    "name": "差旅管理系统",
+    "path": "E:/Desktop/langchain-business-trip-management",
+    "description": "用于测试Project Tracker Agent"
+  }
+}
