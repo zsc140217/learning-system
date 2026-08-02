@@ -13,7 +13,7 @@ llm:
 
 mcp:
   memory:
-    enabled: false  # Will be enabled in Phase 4.2
+    enabled: true  # Enabled in Phase 4.2 - All tests passed
     url: http://localhost:3000
     timeout: 10
 
@@ -25,7 +25,7 @@ agents:
     question_limit: 10
 
   memory:
-    enabled: false
+    enabled: true  # Enabled in Phase 4.2
     fallback_mode: true
 
   project:
