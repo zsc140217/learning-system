@@ -10,8 +10,8 @@ Core Layer - 核心业务逻辑
 
 from .mastery_analyzer import MasteryAnalyzer, KnowledgePoint, MasteryReport
 from .code_extractor import CodeExtractor, KnowledgeNode, ExtractionResult
-from .difficulty_estimator import DifficultyEstimator, DifficultyAssessment
-from .review_scheduler import ReviewScheduler, ReviewPlan
+from .difficulty_estimator import DifficultyEstimator, DifficultyScore
+from .review_scheduler import ReviewScheduler, ReviewPlan, ReviewItem
 
 __all__ = [
     'MasteryAnalyzer',
@@ -21,7 +21,8 @@ __all__ = [
     'KnowledgeNode',
     'ExtractionResult',
     'DifficultyEstimator',
-    'DifficultyAssessment',
+    'DifficultyScore',
     'ReviewScheduler',
     'ReviewPlan',
+    'ReviewItem',
 ]
