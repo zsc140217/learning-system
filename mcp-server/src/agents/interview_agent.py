@@ -17,14 +17,17 @@ class InterviewAgent(BaseAgent):
     Features:
     - Extracts technical highlights from project analysis
     - Generates behavioral and technical interview questions
-    - Provides standard answer templates
+    - Provides standard answer templates (with optional LLM enhancement)
     - Identifies weak knowledge points requiring review
     """
 
-    def __init__(self, agent_id: str, bus):
+    def __init__(self, agent_id: str, bus, llm_provider=None):
         super().__init__(agent_id, bus)
         # Question templates for different categories
         self._question_templates = self._init_question_templates()
+        # Optional LLM provider for generating high-quality answers
+        self._llm_provider = llm_provider
+        self._llm_available = llm_provider is not None
 
     async def start(self) -> None:
         """Start the agent and subscribe to events"""
@@ -117,7 +120,105 @@ class InterviewAgent(BaseAgent):
         q = self._generate_overview_question(project_name, analysis)
         questions.insert(0, q)  # Put at the beginning
 
+        # 5. Enhance answers with LLM if available
+        if self._llm_available:
+            questions = await self._enhance_answers_with_llm(questions, analysis)
+
         return questions
+
+    async def _enhance_answers_with_llm(
+        self,
+        questions: List[Dict[str, Any]],
+        analysis: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enhance standard answers using LLM
+
+        Args:
+            questions: List of questions with template answers
+            analysis: Project analysis for context
+
+        Returns:
+            Questions with LLM-enhanced answers
+        """
+        enhanced_questions = []
+
+        for q in questions:
+            try:
+                # Generate enhanced answer using LLM
+                enhanced_answer = await self._generate_llm_answer(q, analysis)
+
+                # Keep template as fallback
+                q["template_answer"] = q["standard_answer"]
+                q["standard_answer"] = enhanced_answer
+                q["answer_source"] = "llm"
+
+            except Exception as e:
+                # Fallback to template on error
+                self._logger.warning(f"LLM enhancement failed for {q['id']}: {e}")
+                q["answer_source"] = "template"
+
+            enhanced_questions.append(q)
+
+        return enhanced_questions
+
+    async def _generate_llm_answer(
+        self,
+        question: Dict[str, Any],
+        analysis: Dict[str, Any]
+    ) -> str:
+        """
+        Generate answer using LLM based on question and project context
+
+        Args:
+            question: Question dict with template answer
+            analysis: Project analysis results
+
+        Returns:
+            LLM-generated answer text
+        """
+        # Prepare context for LLM
+        project_path = analysis.get("project_path", "unknown")
+        project_name = project_path.split("\\")[-1] if "\\" in project_path else project_path.split("/")[-1]
+        language = analysis.get("language", "unknown")
+        tech_stack = analysis.get("tech_stack", {})
+        architecture = analysis.get("architecture", {})
+
+        # Build prompt for LLM
+        prompt = f"""You are helping a candidate prepare for a technical interview.
+
+**Project Context:**
+- Project Name: {project_name}
+- Language: {language}
+- Architecture: {architecture.get("structure", "unknown")}
+- Tech Stack: {self._format_tech_stack(tech_stack)}
+
+**Interview Question:**
+{question["question"]}
+
+**Template Answer (for reference):**
+{question["standard_answer"]}
+
+**Task:**
+Generate a natural, professional interview answer (150-250 words) that:
+1. Directly answers the question
+2. Uses the project context provided
+3. Sounds conversational, not like a template
+4. Includes specific technical details
+5. Demonstrates deep understanding
+
+**Answer:**"""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        # Call LLM
+        response = await self._llm_provider.chat(
+            messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+
+        return response.strip()
 
     def _generate_overview_question(
         self,
