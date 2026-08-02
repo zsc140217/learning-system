@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 24px 32px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .toolbar {
+            padding: 16px 32px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 200px;
+            position: relative;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px 16px;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            border: 1px solid #dee2e6;
+            background: white;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: #f8f9fa;
+            border-color: #adb5bd;
+        }
+
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .graph-container {
+            position: relative;
+            height: 600px;
+            background: #fafbfc;
+        }
+
+        #graph-canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .legend {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: white;
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            font-size: 12px;
+        }
+
+        .legend-title {
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #495057;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .legend-label {
+            color: #6c757d;
+        }
+
+        .node-details {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            right: 16px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+            display: none;
+        }
+
+        .node-details.visible {
+            display: block;
+        }
+
+        .node-details-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 12px;
+        }
+
+        .node-details-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #212529;
+        }
+
+        .node-details-type {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #e9ecef;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #495057;
+        }
+
+        .node-details-content {
+            color: #6c757d;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .node-details-meta {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            gap: 20px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 20px;
+            color: #6c757d;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .close-btn:hover {
+            background: #f8f9fa;
+            color: #495057;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #6c757d;
+        }
+
+        .empty-state svg {
+            width: 120px;
+            height: 120px;
+            margin-bottom: 16px;
+            opacity: 0.3;
+        }
+
+        .stats {
+            padding: 16px 32px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            gap: 32px;
+            font-size: 13px;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #6c757d;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Knowledge Graph Viewer</h1>
+            <p>Visualize your knowledge network and connections</p>
+        </div>
+
+        <div class="toolbar">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search knowledge nodes...">
+            </div>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="Technology">Technology</button>
+                <button class="filter-btn" data-filter="Knowledge">Knowledge</button>
+                <button class="filter-btn" data-filter="Project">Project</button>
+            </div>
+        </div>
+
+        <div class="graph-container">
+            <canvas id="graph-canvas"></canvas>
+
+            <div class="legend">
+                <div class="legend-title">Node Types</div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #4CAF50;"></div>
+                    <div class="legend-label">Mastered</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #FFC107;"></div>
+                    <div class="legend-label">Learning</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #F44336;"></div>
+                    <div class="legend-label">Not Learned</div>
+                </div>
+            </div>
+
+            <div class="node-details" id="node-details">
+                <div class="node-details-header">
+                    <div>
+                        <div class="node-details-title" id="node-title">Node Title</div>
+                        <span class="node-details-type" id="node-type">Type</span>
+                    </div>
+                    <button class="close-btn" id="close-details">&times;</button>
+                </div>
+                <div class="node-details-content" id="node-content">
+                    Node content will appear here
+                </div>
+                <div class="node-details-meta" id="node-meta">
+                    <span>Updated: <strong id="node-updated">-</strong></span>
+                    <span>Connections: <strong id="node-connections">-</strong></span>
+                </div>
+            </div>
+
+            <div class="empty-state" id="empty-state" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+                <p>No knowledge nodes found. Start learning to build your graph!</p>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-item">
+                <span>Total Nodes:</span>
+                <span class="stat-value" id="stat-total">0</span>
+            </div>
+            <div class="stat-item">
+                <span>Connections:</span>
+                <span class="stat-value" id="stat-connections">0</span>
+            </div>
+            <div class="stat-item">
+                <span>Mastery:</span>
+                <span class="stat-value" id="stat-mastery">0%</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // MCP App State
+        const state = {
+            nodes: [],
+            edges: [],
+            selectedNode: null,
+            currentFilter: 'all',
+            searchQuery: ''
+        };
+
+        // Initialize with template data from MCP
+        const templateData = window.templateData || {
+            nodes: [
+                {
+                    id: 'node-1',
+                    name: 'FastAPI',
+                    entityType: 'Technology',
+                    mastery: 'mastered',
+                    observations: ['REST API framework', 'Used in 3 projects'],
+                    lastUpdated: '2026-08-01T10:00:00'
+                },
+                {
+                    id: 'node-2',
+                    name: 'MCP Protocol',
+                    entityType: 'Knowledge',
+                    mastery: 'learning',
+                    observations: ['Model Context Protocol', 'Learning implementation'],
+                    lastUpdated: '2026-08-02T14:00:00'
+                },
+                {
+                    id: 'node-3',
+                    name: 'Learning System',
+                    entityType: 'Project',
+                    mastery: 'learning',
+                    observations: ['Personal project', 'Agent-based architecture'],
+                    lastUpdated: '2026-08-02T20:00:00'
+                }
+            ],
+            relations: [
+                { from: 'node-3', to: 'node-1', relationType: 'uses' },
+                { from: 'node-3', to: 'node-2', relationType: 'implements' }
+            ]
+        };
+
+        state.nodes = templateData.nodes;
+        state.edges = templateData.relations;
+
+        // Canvas setup
+        const canvas = document.getElementById('graph-canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            renderGraph();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Graph rendering with force-directed layout
+        function renderGraph() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const filteredNodes = getFilteredNodes();
+
+            if (filteredNodes.length === 0) {
+                document.getElementById('empty-state').style.display = 'flex';
+                document.getElementById('graph-canvas').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('graph-canvas').style.display = 'block';
+
+            // Simple circular layout
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = Math.min(canvas.width, canvas.height) / 3;
+
+            filteredNodes.forEach((node, i) => {
+                const angle = (i / filteredNodes.length) * 2 * Math.PI;
+                node.x = centerX + radius * Math.cos(angle);
+                node.y = centerY + radius * Math.sin(angle);
+            });
+
+            // Draw edges
+            state.edges.forEach(edge => {
+                const fromNode = filteredNodes.find(n => n.id === edge.from);
+                const toNode = filteredNodes.find(n => n.id === edge.to);
+
+                if (fromNode && toNode) {
+                    ctx.beginPath();
+                    ctx.moveTo(fromNode.x, fromNode.y);
+                    ctx.lineTo(toNode.x, toNode.y);
+                    ctx.strokeStyle = '#dee2e6';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            });
+
+            // Draw nodes
+            filteredNodes.forEach(node => {
+                const color = getMasteryColor(node.mastery);
+
+                // Node circle
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 30, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
+                ctx.fill();
+                ctx.strokeStyle = state.selectedNode === node.id ? '#667eea' : 'white';
+                ctx.lineWidth = state.selectedNode === node.id ? 4 : 2;
+                ctx.stroke();
+
+                // Node label
+                ctx.fillStyle = '#212529';
+                ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                ctx.textAlign = 'center';
+                ctx.fillText(node.name, node.x, node.y + 45);
+            });
+
+            updateStats(filteredNodes);
+        }
+
+        function getMasteryColor(mastery) {
+            switch (mastery) {
+                case 'mastered': return '#4CAF50';
+                case 'learning': return '#FFC107';
+                case 'not_learned': return '#F44336';
+                default: return '#9E9E9E';
+            }
+        }
+
+        function getFilteredNodes() {
+            let filtered = state.nodes;
+
+            // Apply type filter
+            if (state.currentFilter !== 'all') {
+                filtered = filtered.filter(n => n.entityType === state.currentFilter);
+            }
+
+            // Apply search filter
+            if (state.searchQuery) {
+                const query = state.searchQuery.toLowerCase();
+                filtered = filtered.filter(n =>
+                    n.name.toLowerCase().includes(query) ||
+                    n.observations.some(obs => obs.toLowerCase().includes(query))
+                );
+            }
+
+            return filtered;
+        }
+
+        function updateStats(nodes) {
+            const totalConnections = state.edges.filter(edge =>
+                nodes.some(n => n.id === edge.from || n.id === edge.to)
+            ).length;
+
+            const masteredCount = nodes.filter(n => n.mastery === 'mastered').length;
+            const masteryPercent = nodes.length > 0 ? Math.round((masteredCount / nodes.length) * 100) : 0;
+
+            document.getElementById('stat-total').textContent = nodes.length;
+            document.getElementById('stat-connections').textContent = totalConnections;
+            document.getElementById('stat-mastery').textContent = masteryPercent + '%';
+        }
+
+        // Event handlers
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const filteredNodes = getFilteredNodes();
+            const clickedNode = filteredNodes.find(node => {
+                const dx = x - node.x;
+                const dy = y - node.y;
+                return Math.sqrt(dx * dx + dy * dy) < 30;
+            });
+
+            if (clickedNode) {
+                showNodeDetails(clickedNode);
+            }
+        });
+
+        function showNodeDetails(node) {
+            state.selectedNode = node.id;
+
+            document.getElementById('node-title').textContent = node.name;
+            document.getElementById('node-type').textContent = node.entityType;
+            document.getElementById('node-content').textContent = node.observations.join('. ');
+            document.getElementById('node-updated').textContent = new Date(node.lastUpdated).toLocaleDateString();
+
+            const connections = state.edges.filter(e => e.from === node.id || e.to === node.id).length;
+            document.getElementById('node-connections').textContent = connections;
+
+            document.getElementById('node-details').classList.add('visible');
+            renderGraph();
+        }
+
+        document.getElementById('close-details').addEventListener('click', () => {
+            state.selectedNode = null;
+            document.getElementById('node-details').classList.remove('visible');
+            renderGraph();
+        });
+
+        // Search
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            state.searchQuery = e.target.value;
+            renderGraph();
+        });
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                state.currentFilter = btn.dataset.filter;
+                renderGraph();
+            });
+        });
+
+        // Initial render
+        renderGraph();
+
+        // MCP App: Send confirmation message on load
+        window.addEventListener('load', () => {
+            // Signal to MCP Client that app is ready
+            window.parent.postMessage({
+                type: 'mcp-app-ready',
+                appId: 'io.learning-system.knowledge-graph-viewer'
+            }, '*');
+        });
+    </script>
+</body>
+</html>
