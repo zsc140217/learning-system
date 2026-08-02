@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from .base_provider import BaseLLMProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
+from .deepseek_provider import DeepSeekProvider
 
 
 class LLMProviderFactory:
@@ -21,6 +22,7 @@ class LLMProviderFactory:
     _providers = {
         "openai": OpenAIProvider,
         "anthropic": AnthropicProvider,
+        "deepseek": DeepSeekProvider,
     }
 
     @classmethod

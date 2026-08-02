@@ -1,0 +1,42 @@
+# Learning System Configuration
+# DeepSeek LLM Provider
+
+llm:
+  provider: deepseek
+
+  deepseek:
+    api_key: sk-1c9d612d9af44212a26f48525e5faf79
+    model: deepseek-chat
+    base_url: https://api.deepseek.com
+    temperature: 0.7
+    max_tokens: 1000
+
+mcp:
+  memory:
+    enabled: false  # Will be enabled in Phase 4.2
+    url: http://localhost:3000
+    timeout: 10
+
+agents:
+  interview:
+    enabled: true
+    llm_enhancement: true
+    fallback_to_template: true
+    question_limit: 10
+
+  memory:
+    enabled: false
+    fallback_mode: true
+
+  project:
+    enabled: true
+    analysis_depth: detailed
+    ignore_patterns:
+      - node_modules
+      - __pycache__
+      - .git
+      - dist
+      - build
+
+logging:
+  level: INFO
