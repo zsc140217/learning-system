@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Analysis Configuration</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #718096;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            color: #4a5568;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: #f7fafc;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .checkbox-item:hover {
+            background: #edf2f7;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin-right: 12px;
+            cursor: pointer;
+        }
+
+        .checkbox-label {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .checkbox-title {
+            color: #2d3748;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .checkbox-desc {
+            color: #718096;
+            font-size: 12px;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .radio-item {
+            flex: 1;
+            position: relative;
+        }
+
+        .radio-item input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+        }
+
+        .radio-item label {
+            display: block;
+            padding: 15px;
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+            margin: 0;
+        }
+
+        .radio-item input[type="radio"]:checked + label {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .radio-item label:hover {
+            border-color: #667eea;
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .info-box {
+            background: #ebf8ff;
+            border-left: 4px solid #4299e1;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 25px;
+        }
+
+        .info-box p {
+            color: #2c5282;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Project Analysis</h1>
+        <p class="subtitle">Configure how to analyze your project</p>
+
+        <div class="info-box">
+            <p>Deep analysis may take 5-10 minutes for large projects. Results will be saved to your knowledge graph.</p>
+        </div>
+
+        <form id="configForm">
+            <div class="form-group">
+                <label>Analysis Focus</label>
+                <div class="checkbox-group">
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="focus_architecture" name="focus" value="architecture" checked>
+                        <label for="focus_architecture" class="checkbox-label">
+                            <span class="checkbox-title">Architecture Highlights</span>
+                            <span class="checkbox-desc">Extract design patterns, architectural decisions</span>
+                        </label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="focus_tech_stack" name="focus" value="tech_stack" checked>
+                        <label for="focus_tech_stack" class="checkbox-label">
+                            <span class="checkbox-title">Tech Stack</span>
+                            <span class="checkbox-desc">Identify frameworks, libraries, databases</span>
+                        </label>
+                    </div>
+                    <div class="checkbox-item">
+                        <input type="checkbox" id="focus_challenges" name="focus" value="challenges">
+                        <label for="focus_challenges" class="checkbox-label">
+                            <span class="checkbox-title">Technical Challenges</span>
+                            <span class="checkbox-desc">Find solved problems and optimizations</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Analysis Depth</label>
+                <div class="radio-group">
+                    <div class="radio-item">
+                        <input type="radio" id="depth_shallow" name="depth" value="shallow" checked>
+                        <label for="depth_shallow">Shallow<br><small>~2 min</small></label>
+                    </div>
+                    <div class="radio-item">
+                        <input type="radio" id="depth_deep" name="depth" value="deep">
+                        <label for="depth_deep">Deep<br><small>~10 min</small></label>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary">Start Analysis</button>
+        </form>
+    </div>
+
+    <script>
+        // MCP App Communication Protocol
+        const form = document.getElementById('configForm');
+
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+
+            // Collect form data
+            const focusAreas = Array.from(document.querySelectorAll('input[name="focus"]:checked'))
+                .map(input => input.value);
+
+            const depth = document.querySelector('input[name="depth"]:checked').value;
+
+            // Build configuration object
+            const config = {
+                focus: focusAreas,
+                depth: depth,
+                language: 'auto'
+            };
+
+            // Send result back to MCP Server via postMessage
+            window.parent.postMessage({
+                type: 'mcp-app-result',
+                data: {
+                    confirmed: true,
+                    config: config
+                }
+            }, '*');
+        });
+    </script>
+</body>
+</html>
