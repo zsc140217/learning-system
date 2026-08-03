@@ -4,7 +4,10 @@ Manages knowledge storage and retrieval using Memory MCP Server
 """
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from loguru import logger
+
 from .base_agent import BaseAgent
+from ..storage.mcp_memory_adapter import MCPMemoryAdapter
 
 
 class MemoryManager(BaseAgent):
@@ -15,15 +18,15 @@ class MemoryManager(BaseAgent):
     Emits: knowledge.saved, knowledge.search_completed
 
     Memory MCP Integration:
-    - Uses mcp__plugin_ecc_memory tools for knowledge graph operations
+    - Uses MCPMemoryAdapter for type-safe knowledge graph operations
     - Supports entity creation, relation creation, and node search
     - Caches search results for 1 hour (per MCP caching strategy)
     """
 
     def __init__(self, agent_id: str, bus, mcp_tools: Optional[Dict] = None):
         super().__init__(agent_id, bus)
-        # MCP tools for memory operations (injected from server)
-        self._mcp_tools = mcp_tools or {}
+        # MCP Memory Adapter (封装所有 MCP Memory 操作)
+        self._mcp_adapter = MCPMemoryAdapter(mcp_tools or {})
         # In-memory fallback store when MCP is unavailable
         self._fallback_store: Dict[str, Dict[str, Any]] = {}
         # Cache for MCP availability check
@@ -36,7 +39,8 @@ class MemoryManager(BaseAgent):
         await self.subscribe("project.analysis_completed")
 
         # Check MCP availability on startup
-        self._mcp_available = await self._check_mcp_availability()
+        self._mcp_available = self._mcp_adapter.available
+        logger.info(f"MemoryManager started, MCP available: {self._mcp_available}")
 
     async def process_event(self, event: Dict[str, Any]) -> None:
         """
@@ -56,16 +60,26 @@ class MemoryManager(BaseAgent):
         """Handle knowledge.extracted event"""
         session_id = event.get("session_id")
         knowledge_points = event.get("knowledge_points", [])
+        relations = event.get("relations", [])
 
         # Save knowledge points
         saved_ids = await self._save_knowledge_points(knowledge_points)
+
+        # Create relations if MCP is available
+        if relations and self._mcp_available:
+            try:
+                await self._mcp_adapter.create_relations(relations)
+                logger.info(f"Created {len(relations)} relations for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to create relations: {e}")
 
         # Emit knowledge saved event
         await self.emit({
             "type": "knowledge.saved",
             "session_id": session_id,
             "saved_count": len(saved_ids),
-            "knowledge_ids": saved_ids
+            "knowledge_ids": saved_ids,
+            "relations_count": len(relations)
         })
 
     async def _handle_project_analysis(self, event: Dict[str, Any]) -> None:
@@ -171,21 +185,19 @@ class MemoryManager(BaseAgent):
             Number of entities created
         """
         if not self._mcp_available:
-            return 0
+            # Fallback: store in memory
+            for entity in entities:
+                entity_name = entity.get("name")
+                self._fallback_store[entity_name] = entity
+            return len(entities)
 
         try:
-            # Call mcp__plugin_ecc_memory__create_entities
-            create_entities_tool = self._mcp_tools.get("mcp__plugin_ecc_memory__create_entities")
-            if create_entities_tool:
-                result = await create_entities_tool(entities=entities)
-                return len(entities)
-            else:
-                # Fallback: store in memory
-                for entity in entities:
-                    entity_name = entity.get("name")
-                    self._fallback_store[entity_name] = entity
-                return len(entities)
+            # Use adapter to create entities
+            count = await self._mcp_adapter.create_entities(entities)
+            logger.info(f"Created {count} entities via MCP Memory")
+            return count
         except Exception as e:
+            logger.warning(f"MCP Memory failed, using fallback: {e}")
             # Fallback on error
             for entity in entities:
                 entity_name = entity.get("name")
@@ -237,27 +249,18 @@ class MemoryManager(BaseAgent):
             }
 
         try:
-            # Call mcp__plugin_ecc_memory__search_nodes
-            search_nodes_tool = self._mcp_tools.get("mcp__plugin_ecc_memory__search_nodes")
-            if search_nodes_tool:
-                result = await search_nodes_tool(query=query)
-                return {
-                    "nodes": result,
-                    "source": "memory_mcp",
-                    "_meta": {
-                        "ttlMs": 3600000,  # Cache for 1 hour
-                        "cacheScope": "user"
-                    }
+            # Use adapter to search nodes
+            nodes = await self._mcp_adapter.search_nodes(query)
+            return {
+                "nodes": nodes,
+                "source": "memory_mcp",
+                "_meta": {
+                    "ttlMs": 3600000,  # Cache for 1 hour
+                    "cacheScope": "user"
                 }
-            else:
-                # Fallback
-                results = self._search_fallback(query)
-                return {
-                    "nodes": results,
-                    "source": "fallback",
-                    "_meta": {"ttlMs": 0}
-                }
+            }
         except Exception as e:
+            logger.warning(f"MCP Memory search failed, using fallback: {e}")
             # Fallback on error
             results = self._search_fallback(query)
             return {
@@ -294,24 +297,6 @@ class MemoryManager(BaseAgent):
         """
         return self._fallback_store.get(kp_id)
 
-    async def _check_mcp_availability(self) -> bool:
-        """
-        Check if Memory MCP tools are available
-
-        Returns:
-            True if MCP is available, False otherwise
-        """
-        required_tools = [
-            "mcp__plugin_ecc_memory__create_entities",
-            "mcp__plugin_ecc_memory__search_nodes"
-        ]
-
-        for tool in required_tools:
-            if tool not in self._mcp_tools:
-                return False
-
-        return True
-
     def get_stats(self) -> Dict[str, Any]:
         """
         Get memory store statistics
@@ -325,3 +310,100 @@ class MemoryManager(BaseAgent):
             "mcp_available": self._mcp_available,
             "source": "memory_mcp" if self._mcp_available else "fallback"
         }
+
+    async def link_knowledge_nodes(
+        self,
+        from_node: str,
+        to_node: str,
+        relation_type: str
+    ) -> bool:
+        """
+        建立知识节点之间的关系
+
+        Args:
+            from_node: 源节点名称
+            to_node: 目标节点名称
+            relation_type: 关系类型 (requires/related_to/belongs_to)
+
+        Returns:
+            是否成功建立关系
+        """
+        if not self._mcp_available:
+            logger.warning("MCP not available, cannot create relations")
+            return False
+
+        try:
+            relations = [{
+                "from": from_node,
+                "to": to_node,
+                "relationType": relation_type
+            }]
+
+            await self._mcp_adapter.create_relations(relations)
+            logger.info(f"Created relation: {from_node} --{relation_type}--> {to_node}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create relation: {e}")
+            return False
+
+    async def get_knowledge_graph(
+        self,
+        node_name: str = None
+    ) -> Dict[str, Any]:
+        """
+        获取知识图谱（指定节点的子图或全图）
+
+        Args:
+            node_name: 中心节点名称（None = 全图）
+
+        Returns:
+            {
+                "entities": [...],
+                "relations": [...]
+            }
+        """
+        if not self._mcp_available:
+            logger.warning("MCP not available, returning fallback data")
+            return {
+                "entities": list(self._fallback_store.values()),
+                "relations": [],
+                "source": "fallback"
+            }
+
+        try:
+            if node_name:
+                # 获取特定节点及其关系
+                nodes = await self._mcp_adapter.open_nodes([node_name])
+                return {
+                    "entities": nodes,
+                    "relations": self._extract_relations(nodes),
+                    "source": "memory_mcp"
+                }
+            else:
+                # 获取完整图谱
+                graph = await self._mcp_adapter.read_graph()
+                return {
+                    **graph,
+                    "source": "memory_mcp"
+                }
+        except Exception as e:
+            logger.error(f"Failed to get knowledge graph: {e}")
+            return {
+                "entities": list(self._fallback_store.values()),
+                "relations": [],
+                "source": "fallback_error",
+                "error": str(e)
+            }
+
+    def _extract_relations(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """从节点数据中提取关系列表"""
+        relations = []
+        for node in nodes:
+            node_relations = node.get("relations", [])
+            for rel in node_relations:
+                relations.append({
+                    "from": node.get("name"),
+                    "to": rel.get("to"),
+                    "type": rel.get("type")
+                })
+        return relations

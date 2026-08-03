@@ -1,0 +1,36 @@
+# Learning System - Python Dependencies
+# Multi-Agent Learning System with MCP Integration
+# Generated: 2026-08-02
+
+# ============ Core Dependencies ============
+
+# MCP Server Framework
+fastmcp==3.4.5
+
+# LLM Providers
+anthropic==0.120.2          # Anthropic Claude API
+openai==2.38.0              # OpenAI API (used for DeepSeek compatibility)
+
+# Logging
+loguru==0.7.3               # Structured logging with UTF-8 support
+
+# Configuration Management
+pydantic==2.13.4            # Data validation and settings
+pydantic-settings==2.14.1   # Settings management with env support
+PyYAML==6.0.2               # YAML configuration files
+
+# ============ Development Dependencies ============
+
+# Testing (optional - uncomment if needed)
+# pytest==8.0.0
+# pytest-asyncio==0.23.0
+# pytest-cov==4.1.0
+
+# Type Checking (optional - uncomment if needed)
+# mypy==1.8.0
+# types-PyYAML==6.0.12.20260518
+
+# Code Quality (optional - uncomment if needed)
+# black==24.1.0
+# isort==5.13.0
+# flake8==7.0.0
