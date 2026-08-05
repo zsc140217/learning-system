@@ -185,32 +185,101 @@ async def track_project(
         MCPResult with:
         {
             "project_id": "project_xxx",
+            "tech_stack": [...],
+            "framework": "...",
             "highlights": [...],
             "status": "completed"
         }
     """
     from src.utils.id_generator import generate_project_id
+    from src.extensions.python_analyzer import PythonAnalyzerExtension
+    import os
 
     project_id = generate_project_id()
     logger.info(f"追踪项目: {project_path}")
 
-    await bus.publish({
-        "type": "project_track_requested",
-        "project_id": project_id,
-        "data": {
-            "path": project_path,
-            "name": project_name
-        }
-    })
+    # 实际分析项目
+    analyzer = PythonAnalyzerExtension()
 
-    # TODO: 实际实现 Project Tracker 逻辑
-    return MCPResult(
-        data={
+    try:
+        # 1. 检测框架
+        framework_info = analyzer._detect_project_framework(project_path)
+
+        # 2. 扫描项目结构
+        tech_stack = []
+        highlights = []
+
+        # 检查 requirements.txt
+        req_file = os.path.join(project_path, "requirements.txt")
+        if os.path.exists(req_file):
+            tech_stack.append("Python")
+            with open(req_file, 'r', encoding='utf-8') as f:
+                deps = [line.strip() for line in f.readlines() if line.strip() and not line.startswith('#')]
+                highlights.append(f"依赖包数量: {len(deps)}")
+                # 提取主要依赖
+                major_deps = [d.split('==')[0].split('>=')[0] for d in deps[:5]]
+                if major_deps:
+                    highlights.append(f"主要依赖: {', '.join(major_deps)}")
+
+        # 检查 package.json
+        pkg_file = os.path.join(project_path, "package.json")
+        if os.path.exists(pkg_file):
+            tech_stack.append("Node.js")
+            highlights.append("发现 Node.js 项目配置")
+
+        # 统计文件
+        py_files = []
+        for root, dirs, files in os.walk(project_path):
+            # 跳过虚拟环境和缓存目录
+            dirs[:] = [d for d in dirs if d not in ['venv', '__pycache__', 'node_modules', '.git']]
+            for file in files:
+                if file.endswith('.py'):
+                    py_files.append(os.path.join(root, file))
+
+        if py_files:
+            highlights.append(f"Python 文件数量: {len(py_files)}")
+
+        # 3. 添加框架信息
+        if framework_info["framework"] != "Unknown":
+            tech_stack.append(framework_info["framework"])
+            highlights.append(f"检测到框架: {framework_info['framework']} (置信度: {framework_info['confidence']:.0%})")
+            highlights.extend([f"证据: {e}" for e in framework_info["evidence"]])
+
+        # 4. 发布事件
+        await bus.publish({
+            "type": "project_track_requested",
             "project_id": project_id,
-            "highlights": [],
-            "status": "pending"
-        }
-    )
+            "data": {
+                "path": project_path,
+                "name": project_name,
+                "tech_stack": tech_stack,
+                "framework": framework_info["framework"]
+            }
+        })
+
+        return MCPResult(
+            data={
+                "project_id": project_id,
+                "project_path": project_path,
+                "project_name": project_name or os.path.basename(project_path),
+                "tech_stack": tech_stack,
+                "framework": framework_info["framework"],
+                "framework_confidence": framework_info["confidence"],
+                "highlights": highlights,
+                "file_count": len(py_files),
+                "status": "completed"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"项目分析失败: {e}")
+        return MCPResult(
+            data={
+                "project_id": project_id,
+                "error": str(e),
+                "status": "failed"
+            }
+        )
 
 
 @server.tool("explore_technology")
