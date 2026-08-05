@@ -5,7 +5,7 @@ Provides JWT-based request state management with nonce-based replay attack preve
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Any, Dict
 from uuid import uuid4
 
@@ -67,8 +67,8 @@ class JWTHandler:
         payload = {
             "operation": operation,
             "params": params,
-            "exp": datetime.utcnow() + timedelta(minutes=expiry_minutes),
-            "iat": datetime.utcnow(),
+            "exp": datetime.now(UTC) + timedelta(minutes=expiry_minutes),
+            "iat": datetime.now(UTC),
             "nonce": nonce
         }
 

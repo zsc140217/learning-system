@@ -1,0 +1,250 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "nodes": [
+      {
+        "id": "kp-001",
+        "label": "FastAPI Basics",
+        "type": "concept",
+        "size": 20,
+        "description": "Core FastAPI concepts and routing",
+        "color": "#4CAF50"
+      },
+      {
+        "id": "kp-002",
+        "label": "Dependency Injection",
+        "type": "concept",
+        "size": 18,
+        "description": "FastAPI dependency injection system",
+        "color": "#4CAF50"
+      },
+      {
+        "id": "kp-003",
+        "label": "Pydantic Models",
+        "type": "skill",
+        "size": 16,
+        "description": "Data validation with Pydantic",
+        "color": "#2196F3"
+      },
+      {
+        "id": "kp-004",
+        "label": "Async Programming",
+        "type": "concept",
+        "size": 22,
+        "description": "Python async/await patterns",
+        "color": "#4CAF50"
+      },
+      {
+        "id": "kp-005",
+        "label": "MCP Server",
+        "type": "project",
+        "size": 25,
+        "description": "Model Context Protocol implementation",
+        "color": "#FF9800"
+      },
+      {
+        "id": "kp-006",
+        "label": "SQLAlchemy ORM",
+        "type": "tool",
+        "size": 15,
+        "description": "Database ORM for Python",
+        "color": "#9C27B0"
+      },
+      {
+        "id": "kp-007",
+        "label": "REST API Design",
+        "type": "concept",
+        "size": 17,
+        "description": "RESTful API design principles",
+        "color": "#4CAF50"
+      },
+      {
+        "id": "kp-008",
+        "label": "Authentication",
+        "type": "skill",
+        "size": 19,
+        "description": "JWT and OAuth2 implementation",
+        "color": "#2196F3"
+      }
+    ],
+    "edges": [
+      {
+        "source": "kp-001",
+        "target": "kp-002",
+        "type": "prerequisite"
+      },
+      {
+        "source": "kp-001",
+        "target": "kp-003",
+        "type": "uses"
+      },
+      {
+        "source": "kp-004",
+        "target": "kp-001",
+        "type": "prerequisite"
+      },
+      {
+        "source": "kp-002",
+        "target": "kp-005",
+        "type": "applied_in"
+      },
+      {
+        "source": "kp-003",
+        "target": "kp-005",
+        "type": "applied_in"
+      },
+      {
+        "source": "kp-006",
+        "target": "kp-005",
+        "type": "used_by"
+      },
+      {
+        "source": "kp-007",
+        "target": "kp-001",
+        "type": "prerequisite"
+      },
+      {
+        "source": "kp-008",
+        "target": "kp-005",
+        "type": "applied_in"
+      },
+      {
+        "source": "kp-001",
+        "target": "kp-008",
+        "type": "related_to"
+      }
+    ],
+    "config": {
+      "width": 800,
+      "height": 600,
+      "charge_strength": -300
+    }
+  },
+  "_meta": {
+    "io.modelcontextprotocol/uiTemplate": {
+      "templateId": "com.learning-system.knowledge-graph",
+      "templatePath": "E:\\Desktop\\learning-system\\mcp-server\\templates\\knowledge_graph.html",
+      "data": {
+        "nodes": [
+          {
+            "id": "kp-001",
+            "label": "FastAPI Basics",
+            "type": "concept",
+            "size": 20,
+            "description": "Core FastAPI concepts and routing",
+            "color": "#4CAF50"
+          },
+          {
+            "id": "kp-002",
+            "label": "Dependency Injection",
+            "type": "concept",
+            "size": 18,
+            "description": "FastAPI dependency injection system",
+            "color": "#4CAF50"
+          },
+          {
+            "id": "kp-003",
+            "label": "Pydantic Models",
+            "type": "skill",
+            "size": 16,
+            "description": "Data validation with Pydantic",
+            "color": "#2196F3"
+          },
+          {
+            "id": "kp-004",
+            "label": "Async Programming",
+            "type": "concept",
+            "size": 22,
+            "description": "Python async/await patterns",
+            "color": "#4CAF50"
+          },
+          {
+            "id": "kp-005",
+            "label": "MCP Server",
+            "type": "project",
+            "size": 25,
+            "description": "Model Context Protocol implementation",
+            "color": "#FF9800"
+          },
+          {
+            "id": "kp-006",
+            "label": "SQLAlchemy ORM",
+            "type": "tool",
+            "size": 15,
+            "description": "Database ORM for Python",
+            "color": "#9C27B0"
+          },
+          {
+            "id": "kp-007",
+            "label": "REST API Design",
+            "type": "concept",
+            "size": 17,
+            "description": "RESTful API design principles",
+            "color": "#4CAF50"
+          },
+          {
+            "id": "kp-008",
+            "label": "Authentication",
+            "type": "skill",
+            "size": 19,
+            "description": "JWT and OAuth2 implementation",
+            "color": "#2196F3"
+          }
+        ],
+        "edges": [
+          {
+            "source": "kp-001",
+            "target": "kp-002",
+            "type": "prerequisite"
+          },
+          {
+            "source": "kp-001",
+            "target": "kp-003",
+            "type": "uses"
+          },
+          {
+            "source": "kp-004",
+            "target": "kp-001",
+            "type": "prerequisite"
+          },
+          {
+            "source": "kp-002",
+            "target": "kp-005",
+            "type": "applied_in"
+          },
+          {
+            "source": "kp-003",
+            "target": "kp-005",
+            "type": "applied_in"
+          },
+          {
+            "source": "kp-006",
+            "target": "kp-005",
+            "type": "used_by"
+          },
+          {
+            "source": "kp-007",
+            "target": "kp-001",
+            "type": "prerequisite"
+          },
+          {
+            "source": "kp-008",
+            "target": "kp-005",
+            "type": "applied_in"
+          },
+          {
+            "source": "kp-001",
+            "target": "kp-008",
+            "type": "related_to"
+          }
+        ],
+        "config": {
+          "width": 800,
+          "height": 600,
+          "charge_strength": -300
+        }
+      }
+    }
+  }
+}

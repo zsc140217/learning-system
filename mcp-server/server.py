@@ -16,6 +16,7 @@ from src.agents.learning_coach import LearningCoach
 from src.triggers import IdleDetector
 from src.security import JWTHandler, NonceStore
 from src.tasks import task_manager
+from src.cache import cacheable, CacheManager
 
 
 # 创建 MCP Server 实例
@@ -30,6 +31,9 @@ idle_detector = None
 # 安全组件
 nonce_store = None
 jwt_handler = None
+
+# 缓存管理
+cache_manager = None
 
 
 # ============ MCP Tools ============
@@ -868,7 +872,7 @@ async def list_sessions() -> str:
 async def startup():
     """启动时执行"""
     global session_analyzer, memory_manager, learning_coach, idle_detector
-    global nonce_store, jwt_handler
+    global nonce_store, jwt_handler, cache_manager
 
     logger.info("=" * 50)
     logger.info("Learning System MCP Server 启动中...")
@@ -879,40 +883,41 @@ async def startup():
 
     # 启动事件总线
     await bus.start()
-    logger.info("✅ 事件总线已启动")
+    logger.info("[OK] 事件总线已启动")
 
-    # 启动缓存管理器
+    # 初始化缓存管理器
+    cache_manager = CacheManager()
     await cache_manager.start_cleanup_task()
-    logger.info("✅ 缓存管理器已启动")
+    logger.info("[OK] 缓存管理器已启动")
 
     # 初始化安全组件
-    logger.info("⏳ 安全组件初始化...")
+    logger.info("[...] 安全组件初始化...")
     nonce_store = NonceStore(cleanup_interval_seconds=60)
     await nonce_store.start()
-    logger.info("✅ NonceStore 已启动")
+    logger.info("[OK] NonceStore 已启动")
 
     jwt_handler = JWTHandler(nonce_store)
-    logger.info("✅ JWTHandler 已初始化")
+    logger.info("[OK] JWTHandler 已初始化")
 
     # 初始化 Agents
-    logger.info("⏳ Agents 初始化...")
+    logger.info("[...] Agents 初始化...")
 
     session_analyzer = SessionAnalyzer("session_analyzer_001", bus)
     await session_analyzer.start()
-    logger.info("✅ SessionAnalyzer 已启动")
+    logger.info("[OK] SessionAnalyzer 已启动")
 
     memory_manager = MemoryManager("memory_manager_001", bus)
     await memory_manager.start()
-    logger.info("✅ MemoryManager 已启动")
+    logger.info("[OK] MemoryManager 已启动")
 
     learning_coach = LearningCoach("learning_coach_001", bus)
     await learning_coach.start()
-    logger.info("✅ LearningCoach 已启动")
+    logger.info("[OK] LearningCoach 已启动")
 
     # 初始化空闲检测器（测试用：60秒空闲阈值）
     idle_detector = IdleDetector(bus, idle_threshold_seconds=60, check_interval_seconds=10)
     await idle_detector.start()
-    logger.info("✅ IdleDetector 已启动")
+    logger.info("[OK] IdleDetector 已启动")
 
 
 async def shutdown():
@@ -925,29 +930,29 @@ async def shutdown():
     # 停止空闲检测器
     if idle_detector:
         await idle_detector.stop()
-        logger.info("✅ IdleDetector 已停止")
+        logger.info("[OK] IdleDetector 已停止")
 
     # 停止 Agents
     if learning_coach:
         await learning_coach.stop()
-        logger.info("✅ LearningCoach 已停止")
+        logger.info("[OK] LearningCoach 已停止")
 
     if memory_manager:
         await memory_manager.stop()
-        logger.info("✅ MemoryManager 已停止")
+        logger.info("[OK] MemoryManager 已停止")
 
     if session_analyzer:
         await session_analyzer.stop()
-        logger.info("✅ SessionAnalyzer 已停止")
+        logger.info("[OK] SessionAnalyzer 已停止")
 
     # 停止安全组件
     if nonce_store:
         await nonce_store.stop()
-        logger.info("✅ NonceStore 已停止")
+        logger.info("[OK] NonceStore 已停止")
 
     # 停止事件总线
     await bus.stop()
-    logger.info("✅ 事件总线已停止")
+    logger.info("[OK] 事件总线已停止")
 
 
 async def main_loop():
@@ -966,9 +971,9 @@ async def main_loop():
         # 创建传输层（注入 Hook）
         transport = StdioTransport(hooks=[session_hook])
 
-        logger.info("🚀 MCP Server 已启动，等待客户端连接...")
-        logger.info("📡 使用 stdio 传输层")
-        logger.info("🎣 Hook 系统已启用（会话自动捕获）")
+        logger.info("[START] MCP Server 已启动，等待客户端连接...")
+        logger.info("[STDIO] 使用 stdio 传输层")
+        logger.info("[HOOK] Hook 系统已启用（会话自动捕获）")
         logger.info("=" * 50)
 
         # 运行传输层（阻塞直到连接关闭）

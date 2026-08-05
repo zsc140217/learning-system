@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "learning-system": {
+      "command": "python",
+      "args": [
+        "E:\\Desktop\\learning-system\\mcp-server\\server.py"
+      ],
+      "env": {
+        "JWT_SECRET": "请运行: python -c \"import secrets; print(secrets.token_hex(32))\" 生成密钥并替换这里",
+        "LOG_LEVEL": "INFO",
+        "MCP_MEMORY_PATH": "E:\\Desktop\\learning-system\\data\\memory",
+        "MAX_CONCURRENT_TASKS": "50"
+      }
+    }
+  }
+}

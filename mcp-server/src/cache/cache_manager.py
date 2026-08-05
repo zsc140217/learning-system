@@ -40,7 +40,7 @@ class CacheManager:
         Args:
             cache_keys: 要失效的缓存键列表
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         for key in cache_keys:
             self._invalidation_marks[key] = now
             logger.info(f"Marked cache as invalid: {key}")
@@ -105,7 +105,7 @@ class CacheManager:
 
     async def _cleanup(self):
         """清理过期的失效标记（保留24小时）"""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         expire_threshold = now - timedelta(hours=24)
 
         expired_keys = [
@@ -124,8 +124,23 @@ class CacheManager:
         return {
             "registered_tools": len(self._tool_cache_config),
             "invalidated_caches": len(self._invalidation_marks),
-            "tools": self._tool_cache_config
+            "tools": self._tool_cache_config,
+            "cache_efficiency": self._calculate_efficiency()
         }
+
+    def _calculate_efficiency(self) -> float:
+        """Calculate cache efficiency (lower invalidated ratio is better)"""
+        if not self._tool_cache_config:
+            return 1.0
+
+        total_registered = len(self._tool_cache_config)
+        invalidated = len(self._invalidation_marks)
+
+        # Efficiency = (registered - invalidated) / registered
+        if total_registered == 0:
+            return 1.0
+
+        return max(0.0, (total_registered - invalidated) / total_registered)
 
 
 # 全局单例

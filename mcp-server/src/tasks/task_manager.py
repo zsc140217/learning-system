@@ -6,7 +6,7 @@ Manages long-running background tasks with progress tracking
 import asyncio
 from typing import Dict, Callable, Any, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 from uuid import uuid4
 
 from loguru import logger
@@ -20,7 +20,7 @@ class TaskState:
     status: str  # running, completed, failed, cancelled
     progress: float  # 0.0 to 1.0
     created_at: datetime
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     message: Optional[str] = None
@@ -84,10 +84,12 @@ class TaskManager:
         state = task_mgr.get_task(task_id)
     """
 
-    def __init__(self):
+    def __init__(self, max_concurrent_tasks: int = 50):
         self.tasks: Dict[str, TaskState] = {}
         self._task_futures: Dict[str, asyncio.Task] = {}
-        logger.info("TaskManager initialized")
+        self._max_concurrent = max_concurrent_tasks
+        self._semaphore = asyncio.Semaphore(max_concurrent_tasks)
+        logger.info(f"TaskManager initialized (max_concurrent={max_concurrent_tasks})")
 
     def create_task(
         self,
@@ -107,7 +109,7 @@ class TaskManager:
             task_id: Unique task identifier
         """
         task_id = f"task-{uuid4().hex[:8]}"
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         self.tasks[task_id] = TaskState(
             task_id=task_id,
@@ -119,12 +121,17 @@ class TaskManager:
             eta_seconds=eta_seconds
         )
 
-        # Start background task
-        future = asyncio.create_task(self._execute_task(task_id, executor))
+        # Start background task with concurrency control
+        future = asyncio.create_task(self._execute_task_with_limit(task_id, executor))
         self._task_futures[task_id] = future
 
         logger.info(f"Task created: {task_id} ({name})")
         return task_id
+
+    async def _execute_task_with_limit(self, task_id: str, executor: Callable):
+        """Execute task with concurrency limit"""
+        async with self._semaphore:
+            await self._execute_task(task_id, executor)
 
     async def _execute_task(self, task_id: str, executor: Callable):
         """
@@ -142,21 +149,21 @@ class TaskManager:
             if self.tasks[task_id].status == "running":
                 self.tasks[task_id].status = "completed"
                 self.tasks[task_id].progress = 1.0
-                self.tasks[task_id].completed_at = datetime.utcnow()
-                self.tasks[task_id].updated_at = datetime.utcnow()
+                self.tasks[task_id].completed_at = datetime.now(UTC)
+                self.tasks[task_id].updated_at = datetime.now(UTC)
                 logger.info(f"Task {task_id} completed successfully")
 
         except asyncio.CancelledError:
             self.tasks[task_id].status = "cancelled"
-            self.tasks[task_id].completed_at = datetime.utcnow()
-            self.tasks[task_id].updated_at = datetime.utcnow()
+            self.tasks[task_id].completed_at = datetime.now(UTC)
+            self.tasks[task_id].updated_at = datetime.now(UTC)
             logger.warning(f"Task {task_id} cancelled")
 
         except Exception as e:
             self.tasks[task_id].status = "failed"
             self.tasks[task_id].error = str(e)
-            self.tasks[task_id].completed_at = datetime.utcnow()
-            self.tasks[task_id].updated_at = datetime.utcnow()
+            self.tasks[task_id].completed_at = datetime.now(UTC)
+            self.tasks[task_id].updated_at = datetime.now(UTC)
             logger.error(f"Task {task_id} failed: {e}")
 
         finally:
@@ -186,7 +193,7 @@ class TaskManager:
 
         task = self.tasks[task_id]
         task.progress = max(0.0, min(1.0, progress))
-        task.updated_at = datetime.utcnow()
+        task.updated_at = datetime.now(UTC)
 
         if message:
             task.message = message
@@ -218,8 +225,8 @@ class TaskManager:
         task.status = "completed"
         task.progress = 1.0
         task.result = result
-        task.completed_at = datetime.utcnow()
-        task.updated_at = datetime.utcnow()
+        task.completed_at = datetime.now(UTC)
+        task.updated_at = datetime.now(UTC)
 
         if message:
             task.message = message
@@ -247,8 +254,8 @@ class TaskManager:
         task = self.tasks[task_id]
         task.status = "failed"
         task.error = error
-        task.completed_at = datetime.utcnow()
-        task.updated_at = datetime.utcnow()
+        task.completed_at = datetime.now(UTC)
+        task.updated_at = datetime.now(UTC)
 
         if message:
             task.message = message
@@ -328,7 +335,7 @@ class TaskManager:
         Args:
             max_age_hours: Maximum age in hours to keep
         """
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         to_remove = []
 
         for task_id, task in self.tasks.items():
@@ -343,6 +350,21 @@ class TaskManager:
 
         if to_remove:
             logger.info(f"Cleaned up {len(to_remove)} old tasks")
+
+    def get_stats(self) -> dict:
+        """Get task manager statistics"""
+        running = sum(1 for t in self.tasks.values() if t.status == "running")
+        completed = sum(1 for t in self.tasks.values() if t.status == "completed")
+        failed = sum(1 for t in self.tasks.values() if t.status == "failed")
+
+        return {
+            "total_tasks": len(self.tasks),
+            "running": running,
+            "completed": completed,
+            "failed": failed,
+            "max_concurrent": self._max_concurrent,
+            "available_slots": self._semaphore._value
+        }
 
 
 # Global task manager instance

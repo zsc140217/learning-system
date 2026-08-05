@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            overflow: hidden;
+        }
+
+        #graph {
+            width: 100vw;
+            height: 100vh;
+            background: #ffffff;
+        }
+
+        .node {
+            cursor: pointer;
+            stroke: #fff;
+            stroke-width: 2px;
+            transition: r 0.2s ease;
+        }
+
+        .node:hover {
+            stroke-width: 3px;
+            filter: brightness(1.1);
+        }
+
+        .node-label {
+            font-size: 12px;
+            pointer-events: none;
+            user-select: none;
+            fill: #333;
+            font-weight: 500;
+        }
+
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+            stroke-width: 1.5px;
+            fill: none;
+        }
+
+        .link-label {
+            font-size: 10px;
+            fill: #666;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        #tooltip {
+            position: absolute;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            border-radius: 4px;
+            font-size: 14px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 1000;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        #controls button {
+            display: block;
+            width: 100%;
+            margin: 5px 0;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            background: #4CAF50;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        #controls button:hover {
+            background: #45a049;
+        }
+
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .legend-label {
+            font-size: 12px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div id="graph"></div>
+    <div id="tooltip"></div>
+
+    <div id="controls">
+        <button id="resetBtn">Reset View</button>
+        <button id="centerBtn">Center Graph</button>
+    </div>
+
+    <div id="legend"></div>
+
+    <script>
+        // Get data from MCP client
+        const data = window.__MCP_DATA__ || {
+            nodes: [],
+            edges: [],
+            config: {}
+        };
+
+        const config = {
+            width: data.config?.width || 800,
+            height: data.config?.height || 600,
+            chargeStrength: data.config?.charge_strength || -300
+        };
+
+        // Color mapping by node type
+        const typeColors = {
+            'concept': '#4CAF50',
+            'skill': '#2196F3',
+            'project': '#FF9800',
+            'tool': '#9C27B0',
+            'default': '#757575'
+        };
+
+        function getNodeColor(type) {
+            return typeColors[type] || typeColors.default;
+        }
+
+        // Create SVG
+        const svg = d3.select("#graph")
+            .append("svg")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .attr("viewBox", [0, 0, config.width, config.height]);
+
+        // Add zoom behavior
+        const g = svg.append("g");
+
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            });
+
+        svg.call(zoom);
+
+        // Create arrow markers for directed edges
+        svg.append("defs").selectAll("marker")
+            .data(["end"])
+            .join("marker")
+            .attr("id", "arrow")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 20)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("fill", "#999")
+            .attr("d", "M0,-5L10,0L0,5");
+
+        // Create force simulation
+        const simulation = d3.forceSimulation(data.nodes)
+            .force("link", d3.forceLink(data.edges)
+                .id(d => d.id)
+                .distance(100))
+            .force("charge", d3.forceManyBody()
+                .strength(config.chargeStrength))
+            .force("center", d3.forceCenter(config.width / 2, config.height / 2))
+            .force("collision", d3.forceCollide()
+                .radius(d => (d.size || 10) + 5));
+
+        // Create links
+        const link = g.append("g")
+            .selectAll("line")
+            .data(data.edges)
+            .join("line")
+            .attr("class", "link")
+            .attr("marker-end", "url(#arrow)");
+
+        // Create link labels
+        const linkLabel = g.append("g")
+            .selectAll("text")
+            .data(data.edges)
+            .join("text")
+            .attr("class", "link-label")
+            .attr("text-anchor", "middle")
+            .text(d => d.type || "");
+
+        // Create nodes
+        const node = g.append("g")
+            .selectAll("circle")
+            .data(data.nodes)
+            .join("circle")
+            .attr("class", "node")
+            .attr("r", d => d.size || 10)
+            .attr("fill", d => d.color || getNodeColor(d.type))
+            .call(drag(simulation));
+
+        // Create node labels
+        const nodeLabel = g.append("g")
+            .selectAll("text")
+            .data(data.nodes)
+            .join("text")
+            .attr("class", "node-label")
+            .attr("text-anchor", "middle")
+            .attr("dy", d => (d.size || 10) + 15)
+            .text(d => d.label || d.id);
+
+        // Tooltip
+        const tooltip = d3.select("#tooltip");
+
+        node.on("mouseover", (event, d) => {
+            tooltip
+                .style("opacity", 1)
+                .html(`
+                    <strong>${d.label || d.id}</strong><br/>
+                    Type: ${d.type || 'unknown'}<br/>
+                    ${d.description ? `Description: ${d.description}<br/>` : ''}
+                    Click: View Details<br/>
+                    Double-click: Expand
+                `)
+                .style("left", (event.pageX + 10) + "px")
+                .style("top", (event.pageY - 28) + "px");
+        })
+        .on("mouseout", () => {
+            tooltip.style("opacity", 0);
+        });
+
+        // Node click: view details
+        node.on("click", (event, d) => {
+            event.stopPropagation();
+            if (window.__MCP_CALL_TOOL__) {
+                window.__MCP_CALL_TOOL__("view_knowledge_detail", {
+                    knowledge_id: d.id
+                });
+            }
+        });
+
+        // Node double-click: expand subgraph
+        node.on("dblclick", (event, d) => {
+            event.stopPropagation();
+            if (window.__MCP_CALL_TOOL__) {
+                window.__MCP_CALL_TOOL__("expand_knowledge_graph", {
+                    knowledge_id: d.id,
+                    depth: 1
+                });
+            }
+        });
+
+        // Drag behavior
+        function drag(simulation) {
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.fy = event.subject.y;
+            }
+
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+
+            return d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended);
+        }
+
+        // Update positions on each tick
+        simulation.on("tick", () => {
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            linkLabel
+                .attr("x", d => (d.source.x + d.target.x) / 2)
+                .attr("y", d => (d.source.y + d.target.y) / 2);
+
+            node
+                .attr("cx", d => d.x)
+                .attr("cy", d => d.y);
+
+            nodeLabel
+                .attr("x", d => d.x)
+                .attr("y", d => d.y);
+        });
+
+        // Controls
+        d3.select("#resetBtn").on("click", () => {
+            svg.transition()
+                .duration(750)
+                .call(zoom.transform, d3.zoomIdentity);
+        });
+
+        d3.select("#centerBtn").on("click", () => {
+            simulation.alpha(1).restart();
+        });
+
+        // Build legend
+        const legendItems = Object.entries(typeColors)
+            .filter(([type]) => type !== 'default')
+            .map(([type, color]) => ({ type, color }));
+
+        const legend = d3.select("#legend");
+        legend.selectAll(".legend-item")
+            .data(legendItems)
+            .join("div")
+            .attr("class", "legend-item")
+            .html(d => `
+                <div class="legend-color" style="background-color: ${d.color}"></div>
+                <div class="legend-label">${d.type}</div>
+            `);
+    </script>
+</body>
+</html>

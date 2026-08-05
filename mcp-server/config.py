@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     memory_mcp_host: str = Field(default="localhost")
     memory_mcp_port: int = Field(default=8080)
 
+    # HTTP Server配置
+    http_host: str = Field(default="0.0.0.0")
+    http_port: int = Field(default=8080)
+
     # 测试配置
     test_project_path: Optional[str] = Field(default=None)
 

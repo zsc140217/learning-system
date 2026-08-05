@@ -5,7 +5,7 @@ Maintains an in-memory store of used nonces with automatic expiration.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Dict
 from loguru import logger
 
@@ -63,7 +63,7 @@ class NonceStore:
             nonce: The nonce to mark as used
             expiry_minutes: How long to keep the nonce (default: 10 minutes)
         """
-        expiry_time = datetime.utcnow() + timedelta(minutes=expiry_minutes)
+        expiry_time = datetime.now(UTC) + timedelta(minutes=expiry_minutes)
         self._used_nonces[nonce] = expiry_time
         logger.debug(f"Nonce marked as used: {nonce[:8]}... (expires at {expiry_time})")
 
@@ -80,7 +80,7 @@ class NonceStore:
 
     async def _cleanup_expired(self):
         """Remove expired nonces from the store."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         expired = [nonce for nonce, expiry in self._used_nonces.items() if expiry < now]
 
         for nonce in expired:

@@ -1,0 +1,15 @@
+# CLI Client Dependencies
+
+# Terminal UI
+prompt-toolkit==3.0.47      # Interactive prompt with auto-completion
+rich==13.7.1                # Beautiful terminal output and progress bars
+click==8.1.7                # CLI argument parsing
+
+# HTTP Client
+httpx==0.27.0               # Async HTTP client
+
+# JSON/Data
+pydantic==2.13.4            # Data validation
+
+# Utilities
+loguru==0.7.3               # Logging

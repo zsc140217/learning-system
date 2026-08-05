@@ -71,12 +71,17 @@ class MCPServer:
 
     def __init__(self, name: str):
         self.name = name
-        self.tools: Dict[str, Callable] = {}
-        self.resources: Dict[str, Callable] = {}
+        self.tools: Dict[str, Dict[str, Any]] = {}  # 存储元数据字典
+        self.resources: Dict[str, Dict[str, Any]] = {}  # 存储元数据字典
 
-    def tool(self, name: str):
+    def tool(self, name: str, description: str = "", input_schema: dict = None):
         """
-        Decorator to register a tool
+        Decorator to register a tool with metadata
+
+        Args:
+            name: Tool name
+            description: Tool description (extracted from docstring if not provided)
+            input_schema: JSON Schema for tool parameters
 
         Usage:
             @server.tool("my_tool")
@@ -84,13 +89,67 @@ class MCPServer:
                 return MCPResult(data={"result": "ok"})
         """
         def decorator(func: Callable):
-            self.tools[name] = func
+            import inspect
+
+            # 从函数文档字符串提取描述
+            if not description and func.__doc__:
+                desc = func.__doc__.strip().split('\n')[0]
+            else:
+                desc = description
+
+            # 从函数签名生成 input schema
+            if input_schema is None:
+                sig = inspect.signature(func)
+                schema = {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+
+                for param_name, param in sig.parameters.items():
+                    # 跳过特殊参数
+                    if param_name in ['self', 'cls', 'request_state']:
+                        continue
+
+                    param_type = "string"  # 默认类型
+                    if param.annotation != inspect.Parameter.empty:
+                        if param.annotation == int:
+                            param_type = "integer"
+                        elif param.annotation == float:
+                            param_type = "number"
+                        elif param.annotation == bool:
+                            param_type = "boolean"
+                        elif param.annotation == list:
+                            param_type = "array"
+                        elif param.annotation == dict:
+                            param_type = "object"
+
+                    schema["properties"][param_name] = {"type": param_type}
+
+                    # 必填参数（无默认值）
+                    if param.default == inspect.Parameter.empty:
+                        schema["required"].append(param_name)
+            else:
+                schema = input_schema
+
+            # 存储完整元数据
+            self.tools[name] = {
+                "handler": func,
+                "description": desc,
+                "input_schema": schema
+            }
             return func
         return decorator
 
-    def resource(self, uri: str):
+    def resource(self, uri: str, name: str = None, description: str = "", mime_type: str = "text/plain"):
         """
-        Decorator to register a resource
+        Decorator to register a resource with metadata
+
+        Args:
+            uri: Resource URI
+            name: Display name (defaults to URI)
+            description: Resource description
+            mime_type: Content MIME type
 
         Usage:
             @server.resource("knowledge://graph")
@@ -98,7 +157,19 @@ class MCPServer:
                 return "graph data"
         """
         def decorator(func: Callable):
-            self.resources[uri] = func
+            # 从函数文档字符串提取描述
+            if not description and func.__doc__:
+                desc = func.__doc__.strip().split('\n')[0]
+            else:
+                desc = description
+
+            # 存储完整元数据
+            self.resources[uri] = {
+                "handler": func,
+                "name": name or uri,
+                "description": desc,
+                "mime_type": mime_type
+            }
             return func
         return decorator
 
@@ -170,7 +241,8 @@ class MCPServer:
         if tool_name not in self.tools:
             raise MCPError(f"Tool not found: {tool_name}", code=-32602)
 
-        tool_func = self.tools[tool_name]
+        tool_info = self.tools[tool_name]
+        tool_func = tool_info["handler"]  # 从元数据中获取函数
         result = await tool_func(**tool_params)
 
         return result
@@ -180,9 +252,10 @@ class MCPServer:
         tools_list = [
             {
                 "name": name,
-                "description": func.__doc__ or "No description"
+                "description": tool_info.get("description", "No description"),
+                "inputSchema": tool_info.get("input_schema", {})
             }
-            for name, func in self.tools.items()
+            for name, tool_info in self.tools.items()
         ]
 
         return {"tools": tools_list}
@@ -194,14 +267,15 @@ class MCPServer:
         if uri not in self.resources:
             raise MCPError(f"Resource not found: {uri}", code=-32602)
 
-        resource_func = self.resources[uri]
+        resource_info = self.resources[uri]
+        resource_func = resource_info["handler"]  # 从元数据中获取函数
         content = await resource_func()
 
         return {
             "contents": [
                 {
                     "uri": uri,
-                    "mimeType": "text/plain",
+                    "mimeType": resource_info.get("mime_type", "text/plain"),
                     "text": content
                 }
             ]
@@ -212,10 +286,11 @@ class MCPServer:
         resources_list = [
             {
                 "uri": uri,
-                "name": uri.split("://")[1] if "://" in uri else uri,
-                "description": func.__doc__ or "No description"
+                "name": resource_info.get("name", uri.split("://")[1] if "://" in uri else uri),
+                "description": resource_info.get("description", "No description"),
+                "mimeType": resource_info.get("mime_type", "text/plain")
             }
-            for uri, func in self.resources.items()
+            for uri, resource_info in self.resources.items()
         ]
 
         return {"resources": resources_list}
