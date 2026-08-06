@@ -1345,6 +1345,7 @@ async def startup():
     global session_analyzer, memory_manager, learning_coach, idle_detector
     global project_agent, interview_agent
     global nonce_store, jwt_handler, cache_manager
+    global pg_knowledge_graph
 
     logger.info("=" * 50)
     logger.info("Learning System MCP Server 启动中...")
@@ -1501,6 +1502,11 @@ async def shutdown():
             await cache_manager.redis_cache.close()
             logger.info("[OK] Redis 缓存已关闭")
         logger.info("[OK] 缓存管理器已停止")
+
+    # 关闭 PostgreSQL 连接
+    if pg_knowledge_graph:
+        await pg_knowledge_graph.close()
+        logger.info("[Stopped] PostgreSQL KnowledgeGraph 已关闭")
 
     # 停止事件总线
     await bus.stop()
