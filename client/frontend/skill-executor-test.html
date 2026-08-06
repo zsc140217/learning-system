@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Learning System - Skill Executor Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .status.connected {
+            background: #10b981;
+            color: white;
+        }
+
+        .status.disconnected {
+            background: #ef4444;
+            color: white;
+        }
+
+        .panel {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .panel h2 {
+            color: #1f2937;
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+
+        .skill-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .skill-card {
+            border: 2px solid #e5e7eb;
+            padding: 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .skill-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .skill-card.active {
+            border-color: #667eea;
+            background: #f3f4f6;
+        }
+
+        .skill-card h3 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 18px;
+        }
+
+        .skill-card p {
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            color: #374151;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .progress {
+            margin-top: 20px;
+        }
+
+        .phase {
+            background: #f9fafb;
+            padding: 15px;
+            border-left: 4px solid #667eea;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+
+        .phase.success {
+            border-left-color: #10b981;
+        }
+
+        .phase.error {
+            border-left-color: #ef4444;
+        }
+
+        .phase h4 {
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .phase-status {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .phase-status.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .phase-status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .output {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .log {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f4f6;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Learning System - Skill Executor</h1>
+            <p>WebSocket Skill 执行测试界面</p>
+            <div style="margin-top: 15px;">
+                <span class="status" id="status">未连接</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>1. 选择 Skill</h2>
+            <div class="skill-list" id="skillList">
+                <div class="skill-card" data-skill="codebase-onboarding">
+                    <h3>Codebase Onboarding</h3>
+                    <p>快速理解陌生代码库的架构、技术栈和设计模式</p>
+                </div>
+                <div class="skill-card" data-skill="tech-deep-dive">
+                    <h3>Tech Deep Dive</h3>
+                    <p>深度学习技术栈和框架</p>
+                </div>
+                <div class="skill-card" data-skill="interview-prep">
+                    <h3>Interview Prep</h3>
+                    <p>准备技术面试材料</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>2. 配置参数</h2>
+            <div class="input-group">
+                <label for="projectPath">项目路径</label>
+                <input type="text" id="projectPath" placeholder="E:\Desktop\learning-system" value="E:\Desktop\learning-system">
+            </div>
+            <button class="btn" id="executeBtn" disabled>
+                <span id="btnText">执行 Skill</span>
+            </button>
+        </div>
+
+        <div class="panel" id="resultPanel" style="display: none;">
+            <h2>3. 执行结果</h2>
+            <div id="progress"></div>
+            <div class="log" id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let selectedSkill = null;
+        let requestId = 1;
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8000/ws');
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                document.getElementById('status').textContent = '已连接';
+                document.getElementById('status').className = 'status connected';
+                loadSkills();
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                document.getElementById('status').textContent = '未连接';
+                document.getElementById('status').className = 'status disconnected';
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onmessage = (event) => {
+                const response = JSON.parse(event.data);
+                console.log('Received:', response);
+
+                if (response.id === requestId - 1) {
+                    handleResponse(response);
+                }
+            };
+        }
+
+        function loadSkills() {
+            const message = {
+                jsonrpc: "2.0",
+                id: requestId++,
+                method: "skills/list",
+                params: {}
+            };
+            ws.send(JSON.stringify(message));
+        }
+
+        function handleResponse(response) {
+            if (response.error) {
+                alert(`错误: ${response.error.message}`);
+                document.getElementById('executeBtn').disabled = false;
+                document.getElementById('btnText').textContent = '执行 Skill';
+                return;
+            }
+
+            if (response.result) {
+                if (response.result.skills) {
+                    console.log('Skills loaded:', response.result.skills);
+                } else if (response.result.skill_name) {
+                    displayResult(response.result);
+                }
+            }
+        }
+
+        function displayResult(result) {
+            const resultPanel = document.getElementById('resultPanel');
+            const progress = document.getElementById('progress');
+            const log = document.getElementById('log');
+
+            resultPanel.style.display = 'block';
+            progress.innerHTML = '';
+
+            result.phases.forEach(phase => {
+                const phaseDiv = document.createElement('div');
+                phaseDiv.className = `phase ${phase.success ? 'success' : 'error'}`;
+
+                phaseDiv.innerHTML = `
+                    <h4>
+                        ${phase.phase_name}
+                        <span class="phase-status ${phase.success ? 'success' : 'error'}">
+                            ${phase.success ? '成功' : '失败'}
+                        </span>
+                    </h4>
+                    ${phase.error ? `<p style="color: #ef4444;">错误: ${phase.error}</p>` : ''}
+                    <div class="output">${JSON.stringify(phase.output, null, 2)}</div>
+                `;
+
+                progress.appendChild(phaseDiv);
+            });
+
+            log.textContent = result.success
+                ? `✓ Skill 执行成功！完成 ${result.phases.length} 个阶段。`
+                : `✗ Skill 执行失败：${result.error}`;
+
+            document.getElementById('executeBtn').disabled = false;
+            document.getElementById('btnText').textContent = '执行 Skill';
+        }
+
+        document.getElementById('skillList').addEventListener('click', (e) => {
+            const card = e.target.closest('.skill-card');
+            if (card) {
+                document.querySelectorAll('.skill-card').forEach(c => c.classList.remove('active'));
+                card.classList.add('active');
+                selectedSkill = card.dataset.skill;
+                document.getElementById('executeBtn').disabled = false;
+            }
+        });
+
+        document.getElementById('executeBtn').addEventListener('click', () => {
+            if (!selectedSkill) {
+                alert('请先选择一个 Skill');
+                return;
+            }
+
+            const projectPath = document.getElementById('projectPath').value;
+            if (!projectPath) {
+                alert('请输入项目路径');
+                return;
+            }
+
+            document.getElementById('executeBtn').disabled = true;
+            document.getElementById('btnText').innerHTML = '<span class="spinner"></span> 执行中...';
+
+            const message = {
+                jsonrpc: "2.0",
+                id: requestId++,
+                method: "skills/execute",
+                params: {
+                    skill_name: selectedSkill,
+                    context: {
+                        project_path: projectPath
+                    }
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+        });
+
+        connect();
+    </script>
+</body>
+</html>
