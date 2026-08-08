@@ -32,6 +32,25 @@ class Settings(BaseSettings):
     memory_mcp_host: str = Field(default="localhost")
     memory_mcp_port: int = Field(default=8080)
 
+    # Redis配置
+    redis_host: str = Field(default="localhost")
+    redis_port: int = Field(default=6379)
+    redis_db: int = Field(default=0)
+    redis_password: Optional[str] = Field(default=None)
+    redis_enabled: bool = Field(default=True)
+
+    # PostgreSQL配置
+    postgres_host: str = Field(default="localhost")
+    postgres_port: int = Field(default=5432)
+    postgres_db: str = Field(default="learning_system")
+    postgres_user: str = Field(default="admin")
+    postgres_password: str = Field(default="password")
+    postgres_enabled: bool = Field(default=True)
+
+    # DeepSeek API配置
+    deepseek_api_key: str = Field(default="")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com")
+
     # HTTP Server配置
     http_host: str = Field(default="0.0.0.0")
     http_port: int = Field(default=8080)

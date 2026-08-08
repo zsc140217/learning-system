@@ -44,7 +44,7 @@ class LLMProviderFactory:
             ValueError: If provider is not supported or configuration is invalid
         """
         config = config or {}
-        provider_name = config.get("provider", "openai").lower()
+        provider_name = config.get("provider", "deepseek").lower()  # 默认使用 DeepSeek
 
         if provider_name not in cls._providers:
             raise ValueError(

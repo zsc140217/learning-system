@@ -68,12 +68,20 @@ class DeepSeekProvider(BaseLLMProvider):
 
     def _validate_config(self) -> None:
         """Validate DeepSeek configuration"""
-        api_key = self.config.get("api_key") or os.getenv("DEEPSEEK_API_KEY")
+        api_key = self.config.get("api_key")
+
+        if not api_key:
+            # 优先从配置文件读取
+            try:
+                from config import settings
+                api_key = settings.deepseek_api_key
+            except ImportError:
+                api_key = os.getenv("DEEPSEEK_API_KEY")
 
         if not api_key:
             raise ValueError(
                 "DeepSeek API key not found. "
-                "Set DEEPSEEK_API_KEY environment variable or pass 'api_key' in config."
+                "Set DEEPSEEK_API_KEY in mcp-server/.env file or pass 'api_key' in config."
             )
 
         self.config["api_key"] = api_key

@@ -34,3 +34,18 @@ PyYAML==6.0.2               # YAML configuration files
 # black==24.1.0
 # isort==5.13.0
 # flake8==7.0.0
+
+# ============ Database Dependencies ============
+
+# PostgreSQL
+asyncpg==0.29.0             # PostgreSQL async driver (high performance)
+psycopg2-binary==2.9.9      # PostgreSQL sync driver (backup)
+
+# Redis
+redis==5.0.1                # Redis client
+aioredis==2.0.1             # Redis async client
+
+# Vector Search
+pgvector==0.2.4             # pgvector Python client (optional)
+sentence-transformers>=2.2.0  # Embedding model for semantic search
+sqlite-vec>=0.1.0           # SQLite vector extension

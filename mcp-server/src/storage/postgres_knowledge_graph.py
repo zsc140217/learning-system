@@ -47,8 +47,15 @@ class PostgresKnowledgeGraph:
         self.user = user
         self.password = password
 
-        # DeepSeek API
-        self.deepseek_api_key = deepseek_api_key or os.getenv("DEEPSEEK_API_KEY")
+        # DeepSeek API - 优先从配置文件读取
+        if not deepseek_api_key:
+            try:
+                from config import settings
+                deepseek_api_key = settings.deepseek_api_key
+            except ImportError:
+                deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+
+        self.deepseek_api_key = deepseek_api_key
         self.deepseek_base_url = "https://api.deepseek.com"
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
@@ -84,7 +91,8 @@ class PostgresKnowledgeGraph:
         name: str,
         entity_type: str,
         observations: List[str],
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        graph_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         创建实体
@@ -94,6 +102,7 @@ class PostgresKnowledgeGraph:
             entity_type: 实体类型
             observations: 观察列表
             metadata: 元数据
+            graph_id: 所属图谱ID（可选，如果不指定则使用默认图谱）
 
         Returns:
             创建的实体
@@ -102,21 +111,26 @@ class PostgresKnowledgeGraph:
             try:
                 # 插入实体
                 row = await conn.fetchrow("""
-                    INSERT INTO entities (name, entity_type, observations, metadata)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO entities (name, entity_type, observations, metadata, graph_id)
+                    VALUES ($1, $2, $3, $4, $5)
                     ON CONFLICT (name) DO UPDATE
                     SET observations = EXCLUDED.observations,
                         metadata = EXCLUDED.metadata,
+                        graph_id = EXCLUDED.graph_id,
                         updated_at = CURRENT_TIMESTAMP
-                    RETURNING id, name, entity_type, observations, metadata, created_at, updated_at
-                """, name, entity_type, observations, json.dumps(metadata or {}))
+                    RETURNING id, name, entity_type, observations, metadata, graph_id, created_at, updated_at
+                """, name, entity_type, observations, json.dumps(metadata or {}), graph_id)
 
                 entity = dict(row)
 
                 # 生成并存储 embedding
                 await self._generate_and_store_embedding(entity['id'], name, observations)
 
-                logger.info(f"Created entity: {name} (type: {entity_type})")
+                # 更新图谱节点计数
+                if graph_id:
+                    await self.update_graph_node_count(graph_id)
+
+                logger.info(f"Created entity: {name} (type: {entity_type}, graph_id: {graph_id})")
                 return entity
 
             except Exception as e:
@@ -407,3 +421,225 @@ class PostgresKnowledgeGraph:
             """, entity_id, embedding)
 
             logger.debug(f"Stored embedding for entity {entity_id}")
+
+    # ========== 知识图谱管理方法 ==========
+
+    async def create_graph(self, name: str, description: str = "") -> Dict[str, Any]:
+        """
+        创建新图谱
+
+        Args:
+            name: 图谱名称
+            description: 图谱描述
+
+        Returns:
+            创建的图谱信息 {id, name, description, created_at, node_count}
+        """
+        async with self.pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow("""
+                    INSERT INTO knowledge_graphs (name, description, node_count)
+                    VALUES ($1, $2, 0)
+                    RETURNING id, name, description, created_at, updated_at, node_count
+                """, name, description)
+
+                graph = dict(row)
+                logger.info(f"Created knowledge graph: {name} (id: {graph['id']})")
+                return graph
+
+            except Exception as e:
+                logger.error(f"Failed to create knowledge graph {name}: {e}")
+                raise
+
+    async def list_graphs(self) -> List[Dict[str, Any]]:
+        """
+        列出所有图谱
+
+        Returns:
+            图谱列表 [{id, name, description, node_count, created_at}, ...]
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, name, description, node_count, created_at, updated_at
+                FROM knowledge_graphs
+                ORDER BY created_at DESC
+            """)
+
+            graphs = [dict(row) for row in rows]
+            logger.debug(f"Listed {len(graphs)} knowledge graphs")
+            return graphs
+
+    async def get_graph(self, graph_id: int) -> Optional[Dict[str, Any]]:
+        """
+        获取图谱信息
+
+        Args:
+            graph_id: 图谱ID
+
+        Returns:
+            图谱信息或 None
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, name, description, node_count, created_at, updated_at
+                FROM knowledge_graphs
+                WHERE id = $1
+            """, graph_id)
+
+            if row:
+                return dict(row)
+            return None
+
+    async def delete_graph(self, graph_id: int) -> bool:
+        """
+        删除图谱（CASCADE 自动删除节点和关系）
+
+        Args:
+            graph_id: 图谱ID
+
+        Returns:
+            是否删除成功
+        """
+        async with self.pool.acquire() as conn:
+            try:
+                result = await conn.execute("""
+                    DELETE FROM knowledge_graphs WHERE id = $1
+                """, graph_id)
+
+                # result 格式: "DELETE N" 其中 N 是删除的行数
+                deleted_count = int(result.split()[-1])
+                success = deleted_count > 0
+
+                if success:
+                    logger.info(f"Deleted knowledge graph {graph_id}")
+                else:
+                    logger.warning(f"Knowledge graph {graph_id} not found")
+
+                return success
+
+            except Exception as e:
+                logger.error(f"Failed to delete knowledge graph {graph_id}: {e}")
+                raise
+
+    async def merge_graphs(self, source_ids: List[int], target_name: str, target_description: str = "") -> Dict[str, Any]:
+        """
+        合并多个图谱到新图谱
+
+        步骤：
+        1. 创建新图谱
+        2. 更新所有源图谱的节点，设置 graph_id = 新图谱ID
+        3. 更新新图谱的节点计数
+        4. 删除源图谱
+
+        Args:
+            source_ids: 源图谱ID列表
+            target_name: 目标图谱名称
+            target_description: 目标图谱描述
+
+        Returns:
+            新图谱信息
+        """
+        async with self.pool.acquire() as conn:
+            try:
+                async with conn.transaction():
+                    # 1. 创建新图谱
+                    new_graph = await conn.fetchrow("""
+                        INSERT INTO knowledge_graphs (name, description, node_count)
+                        VALUES ($1, $2, 0)
+                        RETURNING id, name, description, created_at, updated_at, node_count
+                    """, target_name, target_description)
+
+                    new_graph_id = new_graph['id']
+
+                    # 2. 迁移节点
+                    await conn.execute("""
+                        UPDATE entities
+                        SET graph_id = $1
+                        WHERE graph_id = ANY($2::int[])
+                    """, new_graph_id, source_ids)
+
+                    # 3. 更新节点计数
+                    updated_graph = await conn.fetchrow("""
+                        UPDATE knowledge_graphs
+                        SET node_count = (SELECT COUNT(*) FROM entities WHERE graph_id = $1)
+                        WHERE id = $1
+                        RETURNING id, name, description, created_at, updated_at, node_count
+                    """, new_graph_id)
+
+                    # 4. 删除源图谱
+                    await conn.execute("""
+                        DELETE FROM knowledge_graphs WHERE id = ANY($1::int[])
+                    """, source_ids)
+
+                    logger.info(f"Merged graphs {source_ids} into new graph {new_graph_id} ({target_name})")
+                    return dict(updated_graph)
+
+            except Exception as e:
+                logger.error(f"Failed to merge graphs {source_ids}: {e}")
+                raise
+
+    async def get_graph_data(self, graph_id: int) -> Dict[str, Any]:
+        """
+        获取指定图谱的所有节点和边，用于可视化
+
+        Args:
+            graph_id: 图谱ID
+
+        Returns:
+            {nodes: [...], edges: [...]}
+        """
+        async with self.pool.acquire() as conn:
+            # 获取节点
+            entity_rows = await conn.fetch("""
+                SELECT id, name, entity_type, observations, metadata
+                FROM entities
+                WHERE graph_id = $1
+            """, graph_id)
+
+            nodes = []
+            for row in entity_rows:
+                nodes.append({
+                    "id": row['name'],  # 使用 name 作为节点 ID
+                    "label": row['name'],
+                    "type": row['entity_type'],
+                    "observations": row['observations'],
+                    "metadata": row['metadata']
+                })
+
+            # 获取边
+            relation_rows = await conn.fetch("""
+                SELECT r.from_entity, r.to_entity, r.relation_type, r.metadata
+                FROM relations r
+                JOIN entities e1 ON r.from_entity = e1.name
+                WHERE e1.graph_id = $1
+            """, graph_id)
+
+            edges = []
+            for row in relation_rows:
+                edges.append({
+                    "source": row['from_entity'],
+                    "target": row['to_entity'],
+                    "type": row['relation_type'],
+                    "metadata": row['metadata']
+                })
+
+            logger.debug(f"Retrieved graph data: {len(nodes)} nodes, {len(edges)} edges")
+            return {
+                "nodes": nodes,
+                "edges": edges
+            }
+
+    async def update_graph_node_count(self, graph_id: int):
+        """
+        更新图谱的节点计数（在添加/删除节点后调用）
+
+        Args:
+            graph_id: 图谱ID
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE knowledge_graphs
+                SET node_count = (SELECT COUNT(*) FROM entities WHERE graph_id = $1),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            """, graph_id)

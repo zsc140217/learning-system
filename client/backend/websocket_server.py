@@ -11,6 +11,7 @@ import uvicorn
 from loguru import logger
 
 from mcp_client import MCPClientPool
+from mcp_http_client import MCPHTTPClient
 from skill_manager import SkillManager
 from skill_executor import SkillExecutor
 from config import config
@@ -30,7 +31,7 @@ app.add_middleware(
 active_connections: Set[WebSocket] = set()
 
 # Global components
-mcp_pool = MCPClientPool()
+mcp_client = None  # MCPHTTPClient instance
 skill_manager = SkillManager(config.skills_dir)
 skill_executor = None  # 延迟初始化
 
@@ -107,23 +108,34 @@ async def websocket_endpoint(websocket: WebSocket):
                         tool_name = params.get("name")
                         arguments = params.get("arguments", {})
 
-                        # Get MCP client
-                        mcp_client = await mcp_pool.get_client(config.mcp_server.name)
+                        logger.info(f"Calling tool: {tool_name} with args: {arguments}")
 
-                        # Call tool via MCP
-                        result = await mcp_client.call_tool(tool_name, arguments)
+                        # Call tool via MCP HTTP client
+                        mcp_response = await mcp_client.call_tool(tool_name, arguments)
 
-                        # Send JSON-RPC response
-                        await manager.send_json(websocket, {
+                        logger.info(f"MCP response keys: {list(mcp_response.keys())}")
+                        logger.info(f"Has _meta in mcp_response: {'_meta' in mcp_response}")
+
+                        # Build JSON-RPC response with _meta support
+                        response = {
                             "jsonrpc": "2.0",
                             "id": request_id,
-                            "result": result
-                        })
+                            "result": mcp_response.get("result", {})
+                        }
+
+                        # Forward _meta field if present
+                        if "_meta" in mcp_response and mcp_response["_meta"]:
+                            response["_meta"] = mcp_response["_meta"]
+                            logger.info(f"Forwarding _meta with keys: {list(mcp_response['_meta'].keys())}")
+                        else:
+                            logger.warning("No _meta field found in mcp_response")
+
+                        logger.info(f"Response keys: {list(response.keys())}")
+
+                        # Send JSON-RPC response
+                        await manager.send_json(websocket, response)
 
                     elif method == "tools/list":
-                        # Get MCP client
-                        mcp_client = await mcp_pool.get_client(config.mcp_server.name)
-
                         # List tools
                         tools = await mcp_client.list_tools()
 
@@ -140,9 +152,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         context = params.get("context", {})
 
                         logger.info(f"Executing skill: {skill_name}")
-
-                        # Get MCP client
-                        mcp_client = await mcp_pool.get_client(config.mcp_server.name)
 
                         # Execute skill with progress updates
                         result = await skill_executor.execute_skill(skill_name, context)
@@ -234,7 +243,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    global skill_executor
+    global skill_executor, mcp_client
 
     logger.info("=" * 60)
     logger.info("Learning System WebSocket Server")
@@ -242,17 +251,10 @@ async def startup():
     logger.info(f"Skills directory: {config.skills_dir}")
     logger.info("Server starting...")
 
-    # Initialize MCP client connection
-    from mcp_client import MCPClient
-    logger.info("Initializing MCP client...")
-    mcp_client = MCPClient(
-        command=config.mcp_server.command,
-        args=config.mcp_server.args,
-        cwd=config.mcp_server.cwd,
-        env=config.mcp_server.env
-    )
-    await mcp_pool.add_client(config.mcp_server.name, mcp_client)
-    logger.info(f"[OK] MCP client '{config.mcp_server.name}' connected")
+    # Initialize MCP HTTP client
+    logger.info("Initializing MCP HTTP client...")
+    mcp_client = MCPHTTPClient(base_url="http://localhost:8080")
+    logger.info("[OK] MCP HTTP client initialized")
 
     # Load skills
     logger.info("Loading skills...")
@@ -267,7 +269,8 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("Server shutting down...")
-    await mcp_pool.stop_all()
+    if mcp_client:
+        await mcp_client.close()
 
 
 if __name__ == "__main__":

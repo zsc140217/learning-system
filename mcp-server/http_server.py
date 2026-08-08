@@ -13,6 +13,7 @@ Features:
 """
 import asyncio
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from loguru import logger
@@ -81,7 +82,46 @@ async def startup():
     await session_analyzer.start()
     logger.info("[OK] SessionAnalyzer 已启动")
 
-    memory_manager = MemoryManager("memory_manager_001", bus)
+    # 初始化 PostgreSQL 知识图谱
+    from pathlib import Path
+    from src.storage.postgres_knowledge_graph import PostgresKnowledgeGraph
+    from src.storage.local_knowledge_graph import LocalKnowledgeGraph
+
+    knowledge_graph = None
+
+    # 尝试连接 PostgreSQL
+    if settings.postgres_enabled:
+        try:
+            pg_knowledge_graph = PostgresKnowledgeGraph(
+                host=settings.postgres_host,
+                port=settings.postgres_port,
+                database=settings.postgres_db,
+                user=settings.postgres_user,
+                password=settings.postgres_password,
+                deepseek_api_key=settings.deepseek_api_key
+            )
+            await pg_knowledge_graph.connect()
+            knowledge_graph = pg_knowledge_graph
+            logger.info("[OK] PostgreSQL KnowledgeGraph 已连接")
+        except Exception as e:
+            logger.warning(f"[WARN] PostgreSQL 连接失败: {e}，降级到 LocalKnowledgeGraph")
+
+    # 降级到 LocalKnowledgeGraph
+    if knowledge_graph is None:
+        try:
+            local_kg_path = Path(settings.data_dir) / "knowledge" / "graph.db"
+            knowledge_graph = LocalKnowledgeGraph(local_kg_path)
+            logger.info(f"[OK] LocalKnowledgeGraph 已初始化 ({local_kg_path})")
+        except Exception as e:
+            logger.warning(f"[WARN] LocalKnowledgeGraph 初始化失败: {e}，将使用内存存储")
+            knowledge_graph = None
+
+    memory_manager = MemoryManager(
+        "memory_manager_001",
+        bus,
+        knowledge_graph=knowledge_graph,
+        local_db_path=str(Path(settings.data_dir) / "knowledge" / "graph.db")
+    )
     await memory_manager.start()
     logger.info("[OK] MemoryManager 已启动")
 
@@ -103,6 +143,25 @@ async def startup():
     server_module.nonce_store = nonce_store
     server_module.jwt_handler = jwt_handler
     server_module.cache_manager = cache_manager
+
+    # 初始化 LLM Provider
+    if settings.deepseek_api_key and settings.deepseek_api_key != "placeholder_key":
+        try:
+            from src.llm.factory import LLMProviderFactory
+            llm_provider = LLMProviderFactory.create({
+                "provider": "deepseek",
+                "api_key": settings.deepseek_api_key,
+                "model": "deepseek-chat",
+                "base_url": settings.deepseek_base_url
+            })
+            server_module.llm_provider = llm_provider
+            logger.info("[OK] DeepSeek LLM Provider 已初始化")
+        except Exception as e:
+            logger.warning(f"[WARN] LLM Provider 初始化失败: {e}")
+            server_module.llm_provider = None
+    else:
+        logger.info("[INFO] DeepSeek API Key 未配置，LLM 对话功能将不可用")
+        server_module.llm_provider = None
 
     logger.info("=" * 60)
     logger.info("[READY] HTTP Server 已就绪，等待客户端连接...")
@@ -143,7 +202,7 @@ async def shutdown():
 
     # 停止缓存管理器
     if cache_manager:
-        await cache_manager.stop()
+        await cache_manager.stop_cleanup_task()
         logger.info("[OK] CacheManager 已停止")
 
     # 停止事件总线
@@ -151,36 +210,44 @@ async def shutdown():
     logger.info("[OK] 事件总线已停止")
 
 
+@asynccontextmanager
+async def lifespan(app):
+    """FastAPI lifespan context manager"""
+    # Startup
+    await startup()
+    yield
+    # Shutdown
+    await shutdown()
+
+
 def main():
     """入口函数"""
-    # 配置日志
-    logger.remove()
-    logger.add(
-        lambda msg: print(msg, end=""),
-        level=settings.log_level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>"
-    )
+    # 使用已配置好 UTF-8 的 logging（从 src.utils.logging 导入时已自动配置）
+    # 不需要重新配置 logger，避免 GBK 编码问题
 
-    # 创建 HTTP 传输层
+    # 创建 HTTP 传输层（使用 lifespan）
     transport = HTTPTransport(server)
     app = transport.get_app()
 
+    # 设置 lifespan
+    app.router.lifespan_context = lifespan
+
     # 添加静态文件服务
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    # 挂载 Skills 目录（供前端加载 Skill 文档）
+    from pathlib import Path
+    skills_dir = Path(__file__).parent / "skills"
+    if skills_dir.exists():
+        app.mount("/skills", StaticFiles(directory=str(skills_dir)), name="skills")
+        logger.info(f"[OK] Skills 静态文件服务已启动: /skills")
+    else:
+        logger.warning(f"[WARN] Skills 目录不存在: {skills_dir}")
 
     @app.get("/")
     async def root():
         """返回主页"""
         return FileResponse("static/index.html")
-
-    # 注册生命周期事件
-    @app.on_event("startup")
-    async def on_startup():
-        await startup()
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        await shutdown()
 
     # 启动 HTTP 服务器
     try:

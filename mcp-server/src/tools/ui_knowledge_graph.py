@@ -103,7 +103,8 @@ def _get_demo_graph_data() -> Dict[str, Any]:
 
 async def generate_knowledge_graph_ui(
     knowledge_ids: Optional[List[str]] = None,
-    depth: int = 2
+    depth: int = 2,
+    memory_manager = None
 ) -> UITemplateResult:
     """
     Generate knowledge graph UI with D3.js force-directed layout.
@@ -111,21 +112,69 @@ async def generate_knowledge_graph_ui(
     Args:
         knowledge_ids: Starting node IDs (None = all nodes)
         depth: Subgraph depth (1-3)
+        memory_manager: MemoryManager instance for fetching real data
 
     Returns:
         UITemplateResult with HTML template
 
     Example:
-        >>> result = await generate_knowledge_graph_ui(["kp-001"], depth=2)
+        >>> result = await generate_knowledge_graph_ui(["kp-001"], depth=2, memory_manager=manager)
         >>> jsonrpc = result.to_jsonrpc(request_id=1)
     """
     # Validate depth
     if depth < 1 or depth > 3:
         raise ValueError("Depth must be between 1 and 3")
 
-    # TODO: Replace with actual MemoryManager integration
-    # graph_data = await memory_manager.get_subgraph(knowledge_ids, depth)
-    graph_data = _get_demo_graph_data()
+    # Fetch real data from MemoryManager or use demo data
+    if memory_manager:
+        try:
+            # Get knowledge graph from MemoryManager
+            graph_response = await memory_manager.get_knowledge_graph(
+                node_name=knowledge_ids[0] if knowledge_ids else None
+            )
+
+            # Transform to UI format
+            graph_data = {
+                "nodes": [],
+                "edges": []
+            }
+
+            # Transform entities to nodes
+            for entity in graph_response.get("entities", []):
+                observations = entity.get("observations", [])
+                node = {
+                    "id": entity.get("id") or entity.get("name"),
+                    "label": entity.get("name", "Unknown"),
+                    "type": entity.get("entityType", "Knowledge").lower(),
+                    "size": 20,
+                    "description": " | ".join(observations[:2]) if observations else "",
+                    "observations": observations  # 添加完整的观察列表，供前端详情面板使用
+                }
+                graph_data["nodes"].append(node)
+
+            # Transform relations to edges
+            for relation in graph_response.get("relations", []):
+                relation_type = relation.get("relationType") or relation.get("relation_type", "related_to")
+                edge = {
+                    "source": relation.get("from") or relation.get("from_entity"),
+                    "target": relation.get("to") or relation.get("to_entity"),
+                    "type": relation_type,
+                    "label": relation_type  # 添加边标签，支持前端显示中文关系名
+                }
+                graph_data["edges"].append(edge)
+
+            logger.info(f"Loaded real knowledge graph: {len(graph_data['nodes'])} nodes, {len(graph_data['edges'])} edges")
+
+            # If no data loaded, use demo data
+            if len(graph_data['nodes']) == 0:
+                logger.info("No data in knowledge graph, using demo data")
+                graph_data = _get_demo_graph_data()
+        except Exception as e:
+            logger.warning(f"Failed to load real data: {e}, using demo data")
+            graph_data = _get_demo_graph_data()
+    else:
+        # Use demo data if no MemoryManager provided
+        graph_data = _get_demo_graph_data()
 
     # Apply knowledge_ids filter if provided
     if knowledge_ids:

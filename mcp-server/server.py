@@ -3,7 +3,7 @@ Learning System MCP Server
 基于自研 MCP 2026-07-28 协议层实现
 """
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -36,6 +36,105 @@ jwt_handler = None
 
 # 缓存管理
 cache_manager = None
+
+# LLM Provider
+llm_provider = None
+
+# 会话历史存储（内存）
+session_histories = {}
+
+# 系统提示词
+BASE_SYSTEM_PROMPT = """你是一个智能学习助手，帮助用户学习技术知识和准备面试。
+
+你的职责：
+1. 回答用户的技术问题，提供清晰、准确的解释
+2. 当用户学习新知识时，帮助总结关键知识点
+3. 支持多轮对话，记住上下文
+
+## 可用工具
+
+你可以使用以下 MCP 工具来增强回答能力：
+
+### 文件操作工具
+- `read_file(file_path, encoding="utf-8")` - 读取本地文件内容
+  示例: 当用户提供文件路径时（如 `E:\\Desktop\\...\\file.md`），使用此工具读取文件
+- `list_directory(directory_path, max_depth=1)` - 列出目录内容
+- `search_files(directory_path, pattern)` - 搜索文件（支持通配符如 *.py）
+- `get_file_info(file_path)` - 获取文件信息（大小、修改时间等）
+
+### 知识管理工具
+- `search_knowledge(query)` - 搜索知识图谱
+- `save_knowledge(knowledge_points, session_id)` - 保存知识点
+- `get_knowledge_graph(node_name)` - 获取知识图谱
+
+### 项目分析工具
+- `track_project(project_path)` - 分析项目结构和技术栈
+- `project/detect_framework(project_path)` - 检测项目框架
+- `project/analyze_dependencies(project_path)` - 分析项目依赖
+
+**重要**: 当用户提到文件路径时，主动使用 `read_file` 工具读取内容，而不是告诉用户"我无法读取文件"。
+
+回答风格：
+- 简洁明了，避免冗长
+- 使用 Markdown 格式（代码块、列表、加粗）
+- 提供实际例子和代码示例
+"""
+
+
+# ============ 会话管理辅助函数 ============
+
+def _get_session_history(session_id: str) -> List[Dict[str, str]]:
+    """获取会话历史"""
+    if session_id not in session_histories:
+        session_histories[session_id] = []
+    return session_histories[session_id]
+
+
+def _save_to_session_history(session_id: str, user_message: str, assistant_message: str):
+    """保存消息到会话历史"""
+    if session_id not in session_histories:
+        session_histories[session_id] = []
+
+    session_histories[session_id].append({"role": "user", "content": user_message})
+    session_histories[session_id].append({"role": "assistant", "content": assistant_message})
+
+    # 限制历史长度（保留最近 10 轮对话）
+    if len(session_histories[session_id]) > 20:
+        session_histories[session_id] = session_histories[session_id][-20:]
+
+
+def _build_system_prompt(skill_context: str = None) -> str:
+    """构建系统提示词"""
+    prompt = BASE_SYSTEM_PROMPT
+
+    if skill_context:
+        prompt += f"\n\n# Active Skill\n\n当前已加载以下 Skill 工作流，请按照 Skill 中的指令执行：\n\n{skill_context}"
+
+    return prompt
+
+
+def _detect_wait_confirm(response: str) -> tuple:
+    """
+    检测响应中是否包含 WAIT for user CONFIRM 标记
+
+    返回: (wait_confirm: bool, confirm_data: dict | None)
+    """
+    # 简单检测：如果响应中包含特殊标记
+    if "WAIT_CONFIRM:" in response:
+        # 提取确认数据
+        import json
+        try:
+            start = response.find("WAIT_CONFIRM:")
+            end = response.find("\n", start)
+            if end == -1:
+                end = len(response)
+            data_str = response[start + 13:end].strip()
+            confirm_data = json.loads(data_str)
+            return True, confirm_data
+        except:
+            return True, None
+
+    return False, None
 
 
 # ============ MCP Tools ============
@@ -129,7 +228,8 @@ def _parse_session_data(session_data: str) -> list[Dict[str, str]]:
 @server.tool("save_knowledge")
 async def save_knowledge(
     knowledge_points: list[Dict[str, Any]],
-    session_id: str
+    session_id: str,
+    graph_id: int = None
 ) -> MCPResult:
     """
     保存知识点到 Memory MCP
@@ -137,6 +237,7 @@ async def save_knowledge(
     Args:
         knowledge_points: 知识点列表
         session_id: 会话ID
+        graph_id: 知识图谱ID（可选，默认使用默认图谱）
 
     Returns:
         MCPResult with:
@@ -146,18 +247,33 @@ async def save_knowledge(
             "status": "completed"
         }
     """
-    logger.info(f"保存知识点: {len(knowledge_points)} 个")
+    logger.info(f"保存知识点: {len(knowledge_points)} 个到图谱 {graph_id}")
+
+    # 如果未指定 graph_id，获取默认图谱ID
+    if graph_id is None:
+        try:
+            kg_storage = getattr(memory_manager, 'kg_storage', None)
+            if kg_storage:
+                # 查询名为"默认图谱"的图谱
+                graphs = await kg_storage.list_graphs()
+                default_graph = next((g for g in graphs if g['name'] == '默认图谱'), None)
+                if default_graph:
+                    graph_id = default_graph['id']
+                    logger.info(f"使用默认图谱 ID: {graph_id}")
+        except Exception as e:
+            logger.warning(f"获取默认图谱失败: {e}，知识点将不关联图谱")
 
     # 发布事件
     await bus.publish({
         "type": "knowledge_save_requested",
         "session_id": session_id,
-        "data": {"knowledge_points": knowledge_points}
+        "data": {"knowledge_points": knowledge_points, "graph_id": graph_id}
     })
 
     # 自动失效知识搜索缓存
     cache_manager.invalidate_pattern("search_knowledge:*")
     cache_manager.invalidate_pattern("get_knowledge_graph:*")
+    cache_manager.invalidate_pattern("list_knowledge_graphs:*")
     logger.info("自动失效知识缓存")
 
     # 实际保存到 Memory Manager
@@ -169,6 +285,9 @@ async def save_knowledge(
                 kp["id"] = generate_knowledge_id()
             if not kp.get("session_id"):
                 kp["session_id"] = session_id
+            # 添加 graph_id
+            if graph_id:
+                kp["graph_id"] = graph_id
 
         # 调用 Memory Manager 保存
         saved_ids = await memory_manager._save_knowledge_points(knowledge_points)
@@ -193,6 +312,23 @@ async def save_knowledge(
                 "error": str(e)
             }
         )
+
+
+@server.tool("delete_knowledge")
+async def delete_knowledge(node_name: str) -> MCPResult:
+    """
+    删除知识点
+
+    Args:
+        node_name: 要删除的节点名称
+    """
+    logger.info(f"删除知识点: {node_name}")
+    try:
+        await memory_manager.delete_entities([node_name])
+        return MCPResult(data={"status": "deleted", "node_name": node_name})
+    except Exception as e:
+        logger.error(f"删除失败: {e}")
+        return MCPResult(data={"status": "failed", "error": str(e)})
 
 
 @server.tool("track_project")
@@ -486,6 +622,334 @@ async def get_knowledge_graph(
             "source": graph.get("source", "unknown")
         }
     )
+
+
+@server.tool("ui_knowledge_graph")
+async def ui_knowledge_graph(
+    knowledge_ids: Optional[List[str]] = None,
+    depth: int = 2
+) -> MCPResult:
+    """
+    生成知识图谱可视化 UI
+
+    Args:
+        knowledge_ids: 起始节点 ID 列表 (None = 全图)
+        depth: 子图深度 (1-3)
+
+    Returns:
+        MCPResult with UI template
+    """
+    from src.tools.ui_knowledge_graph import generate_knowledge_graph_ui
+
+    logger.info(f"生成知识图谱 UI: ids={knowledge_ids}, depth={depth}")
+
+    try:
+        result = await generate_knowledge_graph_ui(
+            knowledge_ids=knowledge_ids,
+            depth=depth,
+            memory_manager=memory_manager
+        )
+
+        # Load HTML template content
+        from pathlib import Path
+        template_html = ""
+        if result.template_path:
+            template_file = Path(result.template_path)
+            if template_file.exists():
+                template_html = template_file.read_text(encoding="utf-8")
+            else:
+                logger.warning(f"Template file not found: {result.template_path}")
+
+        return MCPResult(
+            data=result.template_data,
+            meta={
+                "io.modelcontextprotocol/uiTemplate": {
+                    "templateId": result.template_id,
+                    "template": template_html,
+                    "data": result.template_data
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"生成知识图谱 UI 失败: {e}")
+        return MCPResult(
+            data={"error": str(e)}
+        )
+
+
+@server.tool("search_nodes")
+@cacheable(ttl_seconds=3600, scope="user")  # 1小时用户级缓存
+async def search_nodes(query: str) -> MCPResult:
+    """
+    搜索知识图谱节点（前端知识图谱组件专用）
+
+    Args:
+        query: 搜索关键词
+
+    Returns:
+        MCPResult with:
+        [
+            {
+                "id": "node-id",
+                "name": "节点名称",
+                "type": "concept",
+                "observations": ["观察1", "观察2"]
+            }
+        ]
+    """
+    logger.info(f"搜索节点: {query}")
+
+    try:
+        result = await memory_manager.search_knowledge(query)
+        nodes = result.get("nodes", [])
+
+        # 转换为前端期望的格式
+        formatted_nodes = []
+        for node in nodes:
+            formatted_nodes.append({
+                "id": node.get("name") or node.get("id"),
+                "name": node.get("name", "Unknown"),
+                "type": node.get("entityType", "concept").lower(),
+                "observations": node.get("observations", [])
+            })
+
+        return MCPResult(data=formatted_nodes)
+    except Exception as e:
+        logger.error(f"搜索节点失败: {e}")
+        return MCPResult(data=[])
+
+
+@server.tool("open_nodes")
+@cacheable(ttl_seconds=3600, scope="user")  # 1小时用户级缓存
+async def open_nodes(names: List[str]) -> MCPResult:
+    """
+    获取指定节点的详细信息（前端知识图谱组件专用）
+
+    Args:
+        names: 节点名称列表
+
+    Returns:
+        MCPResult with:
+        [
+            {
+                "id": "node-id",
+                "name": "节点名称",
+                "type": "concept",
+                "observations": ["详细观察1", "详细观察2"]
+            }
+        ]
+    """
+    logger.info(f"获取节点详情: {names}")
+
+    try:
+        # 获取完整知识图谱
+        graph = await memory_manager.get_knowledge_graph()
+        entities = graph.get("entities", [])
+
+        # 筛选指定名称的节点
+        result_nodes = []
+        for entity in entities:
+            entity_name = entity.get("name")
+            if entity_name in names:
+                result_nodes.append({
+                    "id": entity_name,
+                    "name": entity_name,
+                    "type": entity.get("entityType", "concept").lower(),
+                    "observations": entity.get("observations", [])
+                })
+
+        return MCPResult(data=result_nodes)
+    except Exception as e:
+        logger.error(f"获取节点详情失败: {e}")
+        return MCPResult(data=[])
+
+
+# ============ 图谱管理工具 ============
+
+@server.tool("create_knowledge_graph")
+async def create_knowledge_graph_tool(
+    name: str,
+    description: str = ""
+) -> MCPResult:
+    """
+    创建新的知识图谱
+
+    Args:
+        name: 图谱名称
+        description: 图谱描述
+
+    Returns:
+        MCPResult with:
+        {
+            "success": bool,
+            "graph": {
+                "id": int,
+                "name": str,
+                "description": str,
+                "created_at": str,
+                "node_count": int
+            }
+        }
+    """
+    from src.tools.graph_management import create_knowledge_graph
+
+    logger.info(f"创建知识图谱: {name}")
+
+    # 获取知识图谱存储实例
+    kg_storage = getattr(memory_manager, 'kg_storage', None)
+
+    result = await create_knowledge_graph(
+        name=name,
+        description=description,
+        kg_storage=kg_storage
+    )
+
+    return MCPResult(data=result)
+
+
+@server.tool("list_knowledge_graphs")
+@cacheable(ttl_seconds=60, scope="user")  # 1分钟缓存
+async def list_knowledge_graphs_tool() -> MCPResult:
+    """
+    列出所有知识图谱
+
+    Returns:
+        MCPResult with:
+        {
+            "success": bool,
+            "graphs": [
+                {
+                    "id": int,
+                    "name": str,
+                    "description": str,
+                    "node_count": int,
+                    "created_at": str
+                }
+            ]
+        }
+    """
+    from src.tools.graph_management import list_knowledge_graphs
+
+    logger.info("列出所有知识图谱")
+
+    kg_storage = getattr(memory_manager, 'kg_storage', None)
+
+    result = await list_knowledge_graphs(kg_storage=kg_storage)
+
+    return MCPResult(data=result)
+
+
+@server.tool("delete_knowledge_graph")
+async def delete_knowledge_graph_tool(graph_id: int) -> MCPResult:
+    """
+    删除知识图谱
+
+    Args:
+        graph_id: 图谱ID
+
+    Returns:
+        MCPResult with:
+        {
+            "success": bool,
+            "message": str
+        }
+    """
+    from src.tools.graph_management import delete_knowledge_graph
+
+    logger.info(f"删除知识图谱: {graph_id}")
+
+    # 自动失效相关缓存
+    cache_manager.invalidate_pattern("list_knowledge_graphs:*")
+    cache_manager.invalidate_pattern("get_knowledge_graph:*")
+
+    kg_storage = getattr(memory_manager, 'kg_storage', None)
+
+    result = await delete_knowledge_graph(
+        graph_id=graph_id,
+        kg_storage=kg_storage
+    )
+
+    return MCPResult(data=result)
+
+
+@server.tool("merge_knowledge_graphs")
+async def merge_knowledge_graphs_tool(
+    source_ids: List[int],
+    target_name: str,
+    target_description: str = ""
+) -> MCPResult:
+    """
+    合并多个知识图谱
+
+    Args:
+        source_ids: 源图谱ID列表
+        target_name: 目标图谱名称
+        target_description: 目标图谱描述
+
+    Returns:
+        MCPResult with:
+        {
+            "success": bool,
+            "graph": {
+                "id": int,
+                "name": str,
+                "description": str,
+                "created_at": str,
+                "node_count": int
+            }
+        }
+    """
+    from src.tools.graph_management import merge_knowledge_graphs
+
+    logger.info(f"合并知识图谱: {source_ids} -> {target_name}")
+
+    # 自动失效相关缓存
+    cache_manager.invalidate_pattern("list_knowledge_graphs:*")
+    cache_manager.invalidate_pattern("get_knowledge_graph:*")
+
+    kg_storage = getattr(memory_manager, 'kg_storage', None)
+
+    result = await merge_knowledge_graphs(
+        source_ids=source_ids,
+        target_name=target_name,
+        target_description=target_description,
+        kg_storage=kg_storage
+    )
+
+    return MCPResult(data=result)
+
+
+@server.tool("get_graph_data")
+@cacheable(ttl_seconds=300, scope="user")  # 5分钟缓存
+async def get_graph_data_tool(graph_id: int) -> MCPResult:
+    """
+    获取指定图谱的可视化数据
+
+    Args:
+        graph_id: 图谱ID
+
+    Returns:
+        MCPResult with:
+        {
+            "success": bool,
+            "graph": {
+                "nodes": [...],
+                "edges": [...]
+            }
+        }
+    """
+    from src.tools.graph_management import get_knowledge_graph
+
+    logger.info(f"获取图谱数据: {graph_id}")
+
+    kg_storage = getattr(memory_manager, 'kg_storage', None)
+
+    result = await get_knowledge_graph(
+        graph_id=graph_id,
+        kg_storage=kg_storage
+    )
+
+    return MCPResult(data=result)
 
 
 @server.tool("knowledge/create_relation")
@@ -1345,7 +1809,7 @@ async def startup():
     global session_analyzer, memory_manager, learning_coach, idle_detector
     global project_agent, interview_agent
     global nonce_store, jwt_handler, cache_manager
-    global pg_knowledge_graph
+    global pg_knowledge_graph, llm_provider
 
     logger.info("=" * 50)
     logger.info("Learning System MCP Server 启动中...")
@@ -1400,31 +1864,47 @@ async def startup():
 
     # 初始化 PostgreSQL 知识图谱 (优先初始化，MemoryManager 依赖)
     from src.storage.postgres_knowledge_graph import PostgresKnowledgeGraph
-    global pg_knowledge_graph
+    from src.storage.local_knowledge_graph import LocalKnowledgeGraph
+    from pathlib import Path
 
-    try:
-        pg_knowledge_graph = PostgresKnowledgeGraph(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", "learning_system"),
-            user=os.getenv("POSTGRES_USER", "admin"),
-            password=os.getenv("POSTGRES_PASSWORD", "password"),
-            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY")
-        )
-        await pg_knowledge_graph.connect()
-        logger.info("[OK] PostgreSQL KnowledgeGraph 已连接")
-    except Exception as e:
-        logger.warning(f"[WARN] PostgreSQL 连接失败: {e}，将使用本地 SQLite")
-        pg_knowledge_graph = None
+    global pg_knowledge_graph
+    knowledge_graph = None
+
+    # 尝试连接 PostgreSQL
+    if settings.postgres_enabled:
+        try:
+            pg_knowledge_graph = PostgresKnowledgeGraph(
+                host=settings.postgres_host,
+                port=settings.postgres_port,
+                database=settings.postgres_db,
+                user=settings.postgres_user,
+                password=settings.postgres_password,
+                deepseek_api_key=settings.deepseek_api_key
+            )
+            await pg_knowledge_graph.connect()
+            knowledge_graph = pg_knowledge_graph
+            logger.info("[OK] PostgreSQL KnowledgeGraph 已连接")
+        except Exception as e:
+            logger.warning(f"[WARN] PostgreSQL 连接失败: {e}，降级到 LocalKnowledgeGraph")
+
+    # 降级到 LocalKnowledgeGraph
+    if knowledge_graph is None:
+        try:
+            local_kg_path = Path(settings.data_dir) / "knowledge" / "graph.db"
+            knowledge_graph = LocalKnowledgeGraph(local_kg_path)
+            logger.info(f"[OK] LocalKnowledgeGraph 已初始化 ({local_kg_path})")
+        except Exception as e:
+            logger.warning(f"[WARN] LocalKnowledgeGraph 初始化失败: {e}，将使用内存存储")
+            knowledge_graph = None
 
     session_analyzer = SessionAnalyzer("session_analyzer_001", bus)
     await session_analyzer.start()
     logger.info("[OK] SessionAnalyzer 已启动 (1/6)")
 
-    from pathlib import Path
     memory_manager = MemoryManager(
         "memory_manager_001",
         bus,
+        knowledge_graph=knowledge_graph,
         local_db_path=str(Path(settings.data_dir) / "knowledge" / "graph.db")
     )
     await memory_manager.start()
@@ -1453,6 +1933,24 @@ async def startup():
     idle_detector = IdleDetector(bus, idle_threshold_seconds=60, check_interval_seconds=10)
     await idle_detector.start()
     logger.info("[OK] IdleDetector 已启动")
+
+    # 初始化 LLM Provider
+    global llm_provider
+    if settings.deepseek_api_key and settings.deepseek_api_key != "placeholder_key":
+        try:
+            from src.llm.factory import LLMProviderFactory
+            llm_provider = LLMProviderFactory.create({
+                "provider": "deepseek",
+                "api_key": settings.deepseek_api_key,
+                "model": "deepseek-chat",
+                "base_url": settings.deepseek_base_url
+            })
+            logger.info("[OK] DeepSeek LLM Provider 已初始化")
+        except Exception as e:
+            logger.warning(f"[WARN] LLM Provider 初始化失败: {e}")
+            llm_provider = None
+    else:
+        logger.info("[INFO] DeepSeek API Key 未配置，LLM 对话功能将不可用")
 
 
 async def shutdown():
@@ -1906,6 +2404,740 @@ async def extract_patterns(project_path: str, file_limit: int = 20) -> MCPResult
                 "naming_convention": {},
                 "code_patterns": {},
                 "error": str(e)
+            }
+        )
+
+
+@server.tool("project_analyze_status")
+@cacheable(ttl_seconds=3600, scope="public")  # 1小时公共缓存
+async def project_analyze_status(
+    project_path: str,
+    depth: int = 3,
+    output_format: str = "json"
+) -> MCPResult:
+    """
+    完整的项目状态分析，生成结构化报告
+    整合框架检测、结构扫描、依赖分析和模式提取
+
+    Args:
+        project_path: 项目根目录路径
+        depth: 目录扫描深度 (默认3)
+        output_format: 输出格式 (json/markdown)
+
+    Returns:
+        MCPResult with:
+        {
+            "project_name": "learning-system",
+            "summary": {
+                "tech_stack": ["Python - FastAPI"],
+                "complexity": "中等",
+                "completion_percentage": 80,
+                ...
+            },
+            "todos": [...],
+            "learning_suggestions": [...],
+            "analysis_phases": {...}
+        }
+    """
+    from workflows.project_status_analyzer import ProjectStatusAnalyzer
+    import os
+
+    try:
+        # 验证路径
+        if not os.path.exists(project_path):
+            return MCPResult(
+                data={"error": f"项目路径不存在: {project_path}"}
+            )
+
+        # 构建工具注册表
+        tools_registry = {
+            "project/detect_framework": project_detect_framework,
+            "project/scan_structure": project_scan_structure,
+            "project/analyze_dependencies": project_analyze_dependencies,
+            "project/extract_patterns": project_extract_patterns,
+        }
+
+        # 创建分析器并执行
+        analyzer = ProjectStatusAnalyzer(tools_registry)
+        report = await analyzer.analyze(project_path, depth, output_format)
+
+        logger.info(f"项目分析完成: {project_path}")
+
+        return MCPResult(data=report)
+
+    except Exception as e:
+        logger.error(f"项目状态分析失败: {e}")
+        return MCPResult(
+            data={
+                "error": str(e),
+                "project_path": project_path
+            }
+        )
+
+
+@server.tool("chat")
+async def chat_tool(
+    message: str,
+    session_id: str = None,
+    skill_context: str = None
+) -> MCPResult:
+    """
+    与 AI 对话，使用 DeepSeek LLM
+
+    Args:
+        message: 用户消息
+        session_id: 可选的会话ID（用于上下文关联）
+        skill_context: 可选的 Skill 文档内容（Markdown 格式）
+
+    Returns:
+        MCPResult with:
+        {
+            "response": "AI 的回答",
+            "session_id": "session_xxx",
+            "model": "deepseek-chat",
+            "wait_confirm": false,  # 是否需要等待用户确认
+            "confirm_data": null    # 需要确认的数据
+        }
+    """
+    global llm_provider
+
+    # 检查 LLM Provider 是否可用
+    if llm_provider is None:
+        return MCPResult(
+            data={
+                "error": "LLM Provider 未初始化，请检查 DEEPSEEK_API_KEY 配置",
+                "response": "抱歉，AI 对话功能暂时不可用。请联系管理员配置 DeepSeek API Key。"
+            }
+        )
+
+    try:
+        # 生成会话ID
+        if session_id is None:
+            from src.utils.id_generator import generate_session_id
+            session_id = generate_session_id()
+
+        # 获取会话历史
+        session_history = _get_session_history(session_id)
+
+        # 构建系统提示词
+        system_prompt = _build_system_prompt(skill_context)
+
+        # 构建消息列表
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+
+        # 添加会话历史
+        messages.extend(session_history)
+
+        # 添加当前用户消息
+        messages.append({"role": "user", "content": message})
+
+        # 调用 LLM
+        logger.info(f"Chat request [session={session_id}]: {message[:50]}...")
+        if skill_context:
+            logger.info(f"Skill context attached: {len(skill_context)} chars")
+
+        response = await llm_provider.chat(messages)
+
+        logger.info(f"Chat response: {response[:50]}...")
+
+        # 保存会话历史
+        _save_to_session_history(session_id, message, response)
+
+        # 检测是否需要等待用户确认（WAIT for user CONFIRM）
+        wait_confirm, confirm_data = _detect_wait_confirm(response)
+
+        result_data = {
+            "response": response,
+            "session_id": session_id,
+            "model": "deepseek-chat",
+            "wait_confirm": wait_confirm
+        }
+
+        if wait_confirm and confirm_data:
+            result_data["confirm_data"] = confirm_data
+
+        return MCPResult(data=result_data)
+
+    except Exception as e:
+        logger.error(f"Chat error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "response": f"抱歉，处理您的消息时出现错误: {str(e)}"
+            }
+        )
+
+
+@server.tool("summarize_conversation")
+async def summarize_conversation_tool(
+    conversation_text: str,
+    extraction_prompt: str = None
+) -> MCPResult:
+    """
+    从对话中提取知识点
+
+    Args:
+        conversation_text: 完整的对话文本（格式：用户: 问题\\n助手: 回答）
+        extraction_prompt: 可选的自定义提取提示词
+
+    Returns:
+        MCPResult with:
+        {
+            "knowledge_points": [
+                {
+                    "title": "知识点标题",
+                    "content": "详细内容",
+                    "tags": ["标签1", "标签2"],
+                    "type": "concept|technology|method|tool"
+                }
+            ],
+            "count": 3
+        }
+    """
+    from src.tools.summarize_conversation import summarize_conversation
+
+    try:
+        logger.info(f"Summarizing conversation, text length: {len(conversation_text)}")
+        result = await summarize_conversation(conversation_text, extraction_prompt)
+        logger.info(f"Extraction result: {result.get('count', 0)} knowledge points")
+        return MCPResult(data=result)
+
+    except Exception as e:
+        logger.error(f"Summarize conversation error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "knowledge_points": [],
+                "count": 0,
+                "error": str(e)
+            }
+        )
+
+
+@server.tool("execute_skill")
+async def execute_skill_tool(
+    skill_name: str,
+    context: Dict[str, Any]
+) -> MCPResult:
+    """
+    执行预定义的 Skill 工作流
+
+    Args:
+        skill_name: Skill 名称（如 "summarize-knowledge"）
+        context: 执行上下文（如对话历史）
+
+    Returns:
+        MCPResult with:
+        {
+            "skill": "summarize-knowledge",
+            "status": "success|pending_confirmation|error",
+            "phase": "Extract|Confirm|Store",
+            "data": {...}  # 阶段特定的数据
+        }
+
+    Note:
+        这是一个简化的 Skill 执行器，目前支持的 Skills：
+        - summarize-knowledge: 知识总结工作流（Extract → Confirm → Store）
+
+        对于需要用户确认的阶段，返回 status="pending_confirmation"
+        前端应该显示确认对话框，用户确认后继续执行后续阶段
+    """
+    from src.tools.summarize_conversation import summarize_conversation
+
+    try:
+        logger.info(f"Executing skill: {skill_name}")
+
+        if skill_name == "summarize-knowledge":
+            # Phase 1: Extract（提取知识点）
+            messages = context.get('messages', [])
+            conversation_text = '\n\n'.join([
+                f"{'用户' if m.get('role') == 'user' else '助手'}: {m.get('content', '')}"
+                for m in messages
+                if m.get('role') in ['user', 'assistant']
+            ])
+
+            # 调用提取工具
+            result = await summarize_conversation(conversation_text, None)
+
+            if result.get('error'):
+                return MCPResult(
+                    data={
+                        "skill": skill_name,
+                        "status": "error",
+                        "phase": "Extract",
+                        "error": result['error']
+                    }
+                )
+
+            # Phase 1 完成，返回待确认状态
+            return MCPResult(
+                data={
+                    "skill": skill_name,
+                    "status": "pending_confirmation",
+                    "phase": "Confirm",
+                    "knowledge_points": result.get('knowledge_points', []),
+                    "count": result.get('count', 0),
+                    "message": "知识点提取完成，等待用户确认"
+                }
+            )
+
+        else:
+            return MCPResult(
+                data={
+                    "skill": skill_name,
+                    "status": "error",
+                    "error": f"Unknown skill: {skill_name}. Available skills: summarize-knowledge"
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Execute skill error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "skill": skill_name,
+                "status": "error",
+                "error": str(e)
+            }
+        )
+
+
+# ============ 文件系统工具 ============
+
+@server.tool("read_file")
+async def read_file_tool(
+    file_path: str,
+    encoding: str = "utf-8"
+) -> MCPResult:
+    """
+    读取文件内容
+
+    Args:
+        file_path: 文件路径（相对或绝对路径）
+        encoding: 文件编码，默认 utf-8
+
+    Returns:
+        MCPResult with:
+        {
+            "content": "文件内容",
+            "path": "实际路径",
+            "size": 1024,
+            "lines": 50
+        }
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        # 转换为绝对路径
+        path = Path(file_path).resolve()
+
+        # 安全检查：不允许读取敏感文件
+        sensitive_patterns = ['.env', 'password', 'secret', 'token', 'key', '.pem', '.key']
+        if any(pattern in str(path).lower() for pattern in sensitive_patterns):
+            logger.warning(f"Blocked reading sensitive file: {path}")
+            return MCPResult(
+                data={
+                    "error": "拒绝读取敏感文件（包含密钥、密码等）",
+                    "path": str(path)
+                }
+            )
+
+        # 检查文件是否存在
+        if not path.exists():
+            return MCPResult(
+                data={
+                    "error": f"文件不存在: {path}",
+                    "path": str(path)
+                }
+            )
+
+        if not path.is_file():
+            return MCPResult(
+                data={
+                    "error": f"不是文件: {path}",
+                    "path": str(path)
+                }
+            )
+
+        # 读取文件
+        with open(path, 'r', encoding=encoding) as f:
+            content = f.read()
+
+        # 获取文件信息
+        size = path.stat().st_size
+        lines = len(content.splitlines())
+
+        logger.info(f"Read file: {path} ({size} bytes, {lines} lines)")
+
+        return MCPResult(
+            data={
+                "content": content,
+                "path": str(path),
+                "size": size,
+                "lines": lines
+            }
+        )
+
+    except UnicodeDecodeError:
+        return MCPResult(
+            data={
+                "error": f"无法用 {encoding} 编码读取文件，可能是二进制文件",
+                "path": str(path)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Read file error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "path": file_path
+            }
+        )
+
+
+@server.tool("list_directory")
+async def list_directory_tool(
+    directory_path: str,
+    max_depth: int = 1,
+    show_hidden: bool = False
+) -> MCPResult:
+    """
+    列出目录内容
+
+    Args:
+        directory_path: 目录路径
+        max_depth: 最大递归深度（1=仅当前层，2=包含子目录）
+        show_hidden: 是否显示隐藏文件
+
+    Returns:
+        MCPResult with:
+        {
+            "path": "目录路径",
+            "items": [
+                {"name": "file.py", "type": "file", "size": 1024},
+                {"name": "subdir", "type": "directory", "items": [...]}
+            ]
+        }
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        path = Path(directory_path).resolve()
+
+        if not path.exists():
+            return MCPResult(
+                data={
+                    "error": f"目录不存在: {path}",
+                    "path": str(path)
+                }
+            )
+
+        if not path.is_dir():
+            return MCPResult(
+                data={
+                    "error": f"不是目录: {path}",
+                    "path": str(path)
+                }
+            )
+
+        def scan_directory(dir_path: Path, current_depth: int) -> list:
+            """递归扫描目录"""
+            items = []
+
+            try:
+                for item in sorted(dir_path.iterdir()):
+                    # 跳过隐藏文件
+                    if not show_hidden and item.name.startswith('.'):
+                        continue
+
+                    item_data = {
+                        "name": item.name,
+                        "type": "directory" if item.is_dir() else "file"
+                    }
+
+                    if item.is_file():
+                        item_data["size"] = item.stat().st_size
+                    elif item.is_dir() and current_depth < max_depth:
+                        # 递归扫描子目录
+                        item_data["items"] = scan_directory(item, current_depth + 1)
+
+                    items.append(item_data)
+            except PermissionError:
+                pass
+
+            return items
+
+        items = scan_directory(path, 1)
+
+        logger.info(f"Listed directory: {path} ({len(items)} items)")
+
+        return MCPResult(
+            data={
+                "path": str(path),
+                "items": items,
+                "count": len(items)
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"List directory error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "path": directory_path
+            }
+        )
+
+
+@server.tool("search_files")
+async def search_files_tool(
+    directory_path: str,
+    pattern: str,
+    max_results: int = 50
+) -> MCPResult:
+    """
+    搜索文件（支持通配符）
+
+    Args:
+        directory_path: 搜索目录
+        pattern: 文件名模式（如 "*.py", "test_*.js"）
+        max_results: 最大返回结果数
+
+    Returns:
+        MCPResult with:
+        {
+            "matches": [
+                {"path": "path/to/file.py", "size": 1024},
+                ...
+            ],
+            "count": 10
+        }
+    """
+    from pathlib import Path
+
+    try:
+        path = Path(directory_path).resolve()
+
+        if not path.exists() or not path.is_dir():
+            return MCPResult(
+                data={
+                    "error": f"无效的目录: {path}",
+                    "matches": [],
+                    "count": 0
+                }
+            )
+
+        # 使用 glob 搜索
+        matches = []
+        for match in path.rglob(pattern):
+            if match.is_file():
+                matches.append({
+                    "path": str(match),
+                    "name": match.name,
+                    "size": match.stat().st_size
+                })
+
+                if len(matches) >= max_results:
+                    break
+
+        logger.info(f"Searched files in {path} with pattern '{pattern}': {len(matches)} matches")
+
+        return MCPResult(
+            data={
+                "matches": matches,
+                "count": len(matches),
+                "pattern": pattern
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Search files error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "matches": [],
+                "count": 0
+            }
+        )
+
+
+@server.tool("write_file")
+async def write_file_tool(
+    file_path: str,
+    content: str,
+    encoding: str = "utf-8",
+    create_dirs: bool = True
+) -> MCPResult:
+    """
+    写入文件
+
+    Args:
+        file_path: 文件路径
+        content: 文件内容
+        encoding: 文件编码，默认 utf-8
+        create_dirs: 是否自动创建父目录
+
+    Returns:
+        MCPResult with:
+        {
+            "path": "实际路径",
+            "size": 1024,
+            "status": "created|updated"
+        }
+    """
+    from pathlib import Path
+
+    try:
+        path = Path(file_path).resolve()
+
+        # 检查是否已存在
+        existed = path.exists()
+
+        # 创建父目录
+        if create_dirs:
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 写入文件
+        with open(path, 'w', encoding=encoding) as f:
+            f.write(content)
+
+        size = path.stat().st_size
+        status = "updated" if existed else "created"
+
+        logger.info(f"Wrote file: {path} ({size} bytes, {status})")
+
+        return MCPResult(
+            data={
+                "path": str(path),
+                "size": size,
+                "status": status
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Write file error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "path": file_path
+            }
+        )
+
+
+@server.tool("get_file_info")
+async def get_file_info_tool(
+    file_path: str
+) -> MCPResult:
+    """
+    获取文件或目录信息
+
+    Args:
+        file_path: 文件或目录路径
+
+    Returns:
+        MCPResult with:
+        {
+            "path": "实际路径",
+            "type": "file|directory",
+            "size": 1024,
+            "created": "2024-01-01T00:00:00",
+            "modified": "2024-01-01T00:00:00"
+        }
+    """
+    from pathlib import Path
+    from datetime import datetime
+
+    try:
+        path = Path(file_path).resolve()
+
+        if not path.exists():
+            return MCPResult(
+                data={
+                    "error": f"路径不存在: {path}",
+                    "path": str(path)
+                }
+            )
+
+        stat = path.stat()
+
+        return MCPResult(
+            data={
+                "path": str(path),
+                "name": path.name,
+                "type": "directory" if path.is_dir() else "file",
+                "size": stat.st_size if path.is_file() else None,
+                "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Get file info error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "path": file_path
+            }
+        )
+
+
+@server.tool("add_knowledge")
+async def add_knowledge_tool(
+    title: str,
+    content: str,
+    tags: list[str],
+    entity_type: str = "concept"
+) -> MCPResult:
+    """
+    添加单个知识点到知识图谱（封装工具，简化前端调用）
+
+    Args:
+        title: 知识点标题
+        content: 详细内容
+        tags: 标签列表
+        entity_type: 实体类型（concept/technology/method/tool）
+
+    Returns:
+        MCPResult with:
+        {
+            "entity_name": "知识点标题",
+            "status": "created",
+            "observations_count": 2
+        }
+    """
+    from src.storage.mcp_memory_adapter import mcp_memory_adapter
+
+    try:
+        # 构建 observations（内容 + 标签）
+        observations = [content]
+        if tags:
+            observations.append(f"标签: {', '.join(tags)}")
+
+        # 调用 create_entities
+        await mcp_memory_adapter.create_entities([{
+            "name": title,
+            "entityType": entity_type,
+            "observations": observations
+        }])
+
+        logger.info(f"Added knowledge: {title} (type={entity_type}, tags={len(tags)})")
+
+        return MCPResult(
+            data={
+                "entity_name": title,
+                "status": "created",
+                "observations_count": len(observations)
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Add knowledge error: {e}", exc_info=True)
+        return MCPResult(
+            data={
+                "error": str(e),
+                "entity_name": title
             }
         )
 

@@ -1,0 +1,9 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "response": "你好呀！😊 很高兴见到你！我是DeepSeek，由深度求索公司创造的AI助手。无论你有什么问题、需要帮助，还是只是想聊聊天，我都很乐意陪你！今天有什么可以帮你的吗？",
+    "session_id": "session_1786105676_kt73891t",
+    "model": "deepseek-chat"
+  }
+}

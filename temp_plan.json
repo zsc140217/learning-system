@@ -1,0 +1,338 @@
+{
+  "document_title": "Learning-System Frontend Optimization and Knowledge Management Implementation Plan",
+  "executive_summary": "This plan is based on deep research of the ECC ecosystem, designing a complete knowledge summary and confirmation workflow for learning-system. The core goal is to implement a closed loop from session to knowledge extraction, manual confirmation, and graph update, solving the current issues of knowledge graph data flow disruption and insufficient user participation. The plan adopts ECC's three-layer orchestration architecture (Tools - Agents - Skills), quality gates (WAIT for user CONFIRM), and event-driven mechanisms to ensure high-quality knowledge graph construction while maintaining user control.",
+  "ecc_insights": {
+    "why_agent": "Agents are not function calls but independent AI instances with specialized contexts and system prompts. Each agent focuses on a specific domain (knowledge-organizer, quiz-generator, progress-tracker), avoiding context pollution. Key advantages: (1) Context focus - each agent only handles its domain without irrelevant information interference; (2) Parallel execution - independent agents can run concurrently to improve efficiency; (3) Multi-perspective analysis - different role agents review the same problem from multiple angles; (4) Composability - agents can be combined in series or parallel to form complex workflows.",
+    "why_skill": "Skills encapsulate complete workflows: trigger conditions + execution steps + quality gates + confirmation points. Skills are not hardcoded processes but dynamically extensible. Key features: (1) Discoverability - users can list all available skills with clear trigger conditions; (2) Reusability - same workflow patterns can be applied to different domains; (3) Composability - skills can call other skills to form complex workflows; (4) Evolvability - extract new patterns from sessions via ecc:learn and save as new skills. Skills avoid hardcoded flows and enable system dynamic extension.",
+    "why_mcp": "MCP provides a standardized protocol for AI-external system interaction. Key values: (1) Stateless protocol - state is passed explicitly via IDs, avoiding implicit state sync issues; (2) Extensibility - dynamic capability negotiation and tool registration via Extensions framework; (3) MRTR (Multi Round-Trip Request) - JWT + Nonce prevents replay attacks for dangerous operations; (4) Long-running tasks - Tasks extension supports 5-15 minute tasks with progress tracking and ETA; (5) UI Templates (MCP Apps) - supports rendering interactive UI in client, not just text interaction. MCP decouples AI capabilities from implementation details, enabling switching between different knowledge graph backends (Claude memory MCP vs PostgreSQL) without affecting upper layers.",
+    "key_takeaways": [
+      "Three-layer orchestration: Tools (atomic operations) -> Agents (domain expertise) -> Skills (end-to-end workflows)",
+      "Quality gates: mandatory checks and human-in-the-loop confirmation points (WAIT for user CONFIRM) at critical nodes",
+      "Parallel and multi-perspective: independent tasks execute in parallel, multi-role agents provide comprehensive analysis",
+      "State persistence: session mechanism and hooks save checkpoints at critical moments",
+      "Knowledge evolution: learn and evolve from usage, accumulate reusable patterns"
+    ]
+  },
+  "implementation_phases": [
+    {
+      "phase_number": 1,
+      "phase_name": "Basic Optimization (Session Management and Response Formatting)",
+      "priority": "高",
+      "estimated_hours": 8,
+      "tasks": [
+        {
+          "task_name": "Implement Zustand persist middleware for sessionId and currentProject",
+          "files_to_modify": [
+            "client/frontend/src/store/appStore.ts"
+          ],
+          "implementation_details": "Add Zustand persist middleware to appStore. Configure localStorage persistence for sessionId and currentProject fields. Implement state rehydration on app load.",
+          "ecc_pattern_applied": "State persistence pattern from ECC - similar to ecc:save-session and ecc:resume-session, enabling long-term task interruption and resumption"
+        },
+        {
+          "task_name": "Fix WebSocket reconnection message handler registration",
+          "files_to_modify": [
+            "client/frontend/src/services/mcpClient.ts",
+            "client/backend/websocket_server.py"
+          ],
+          "implementation_details": "Ensure message handlers are re-registered after WebSocket reconnection. Implement reconnection logic with exponential backoff. Add connection state tracking.",
+          "ecc_pattern_applied": "Reliability pattern - ensuring system can recover from transient failures without losing state"
+        },
+        {
+          "task_name": "Fix mcpClient.parseResponse() to handle nested _meta fields",
+          "files_to_modify": [
+            "client/frontend/src/services/mcpClient.ts"
+          ],
+          "implementation_details": "Update parseResponse() to check both response._meta and response.result._meta. Handle both response formats (direct _meta vs nested in result). Add proper type guards.",
+          "ecc_pattern_applied": "Defensive programming - handling multiple response formats gracefully"
+        },
+        {
+          "task_name": "Improve ChatInterface error handling and user feedback",
+          "files_to_modify": [
+            "client/frontend/src/components/ChatInterface.tsx"
+          ],
+          "implementation_details": "Add try-catch blocks around MCP tool calls. Display error messages in chat interface. Implement retry mechanism for failed requests. Add loading states and spinners.",
+          "ecc_pattern_applied": "User-centric error handling - similar to ECC's clear error messages and recovery suggestions"
+        }
+      ],
+      "acceptance_criteria": [
+        "sessionId persists across page refreshes",
+        "WebSocket reconnection works without losing state",
+        "_meta fields are correctly parsed from all tool responses",
+        "Error messages are displayed clearly to users with recovery options"
+      ]
+    },
+    {
+      "phase_number": 2,
+      "phase_name": "Knowledge Summary and Confirmation Workflow",
+      "priority": "高",
+      "estimated_hours": 16,
+      "tasks": [
+        {
+          "task_name": "Implement knowledge/summarize backend tool",
+          "files_to_modify": [
+            "mcp-server/server.py",
+            "mcp-server/src/agents/knowledge_extractor.py"
+          ],
+          "implementation_details": "Create knowledge/summarize tool that accepts session_id and optional context parameters. Call LLM (DeepSeek) to analyze session history and extract structured entities and relations. Return JSON format with entities (name, type, observations) and relations (from, to, type). Do not save to database yet - wait for user confirmation. Add min_entities parameter validation.",
+          "ecc_pattern_applied": "Extract-Confirm-Save pattern from ECC /plan - generate plan first, WAIT for user CONFIRM, then execute"
+        },
+        {
+          "task_name": "Implement knowledge/confirm_batch backend tool",
+          "files_to_modify": [
+            "mcp-server/server.py"
+          ],
+          "implementation_details": "Create knowledge/confirm_batch tool that accepts entities, relations, session_id, and optional project_id. Batch call memory_manager.create_entities and memory_manager.create_relations. Invalidate related caches via cache_manager.invalidate_pattern. Publish knowledge.batch_saved event to agent bus. Return saved_entities count, saved_relations count, and knowledge_ids list. Wrap in transaction for atomicity.",
+          "ecc_pattern_applied": "Batch operation pattern - similar to ECC executing all planned tasks in one transaction after confirmation"
+        },
+        {
+          "task_name": "Create KnowledgeConfirmDialog frontend component",
+          "files_to_modify": [
+            "client/frontend/src/components/KnowledgeConfirmDialog.tsx"
+          ],
+          "implementation_details": "Create dialog component displaying extracted entities and relations in editable cards. Support inline editing of name, type, observations. Provide delete button for each entity. Add button to create new entities. Display relations as connections between entities. Bottom bar with Confirm Save and Cancel buttons. Use collapsible card layout for better UX.",
+          "ecc_pattern_applied": "Plan preview interface from ECC /plan - left side shows original context (collapsible), right side shows extracted knowledge (editable)"
+        },
+        {
+          "task_name": "Integrate /summarize command in ChatInterface",
+          "files_to_modify": [
+            "client/frontend/src/components/ChatInterface.tsx",
+            "client/frontend/src/store/appStore.ts"
+          ],
+          "implementation_details": "Detect /summarize or /summarize-knowledge command in handleSend. Call mcpClient.callTool with knowledge/summarize. Parse response and set pendingKnowledge state in appStore. Show KnowledgeConfirmDialog when pendingKnowledge is populated. On user confirmation, call knowledge/confirm_batch with edited entities/relations. Clear pendingKnowledge after successful save.",
+          "ecc_pattern_applied": "WAIT for user CONFIRM pattern - system stops at critical decision point and waits for explicit user approval"
+        },
+        {
+          "task_name": "Auto-refresh knowledge graph after confirmation",
+          "files_to_modify": [
+            "client/frontend/src/components/ChatInterface.tsx",
+            "client/frontend/src/components/KnowledgeGraphView.tsx"
+          ],
+          "implementation_details": "After knowledge/confirm_batch returns success, automatically call ui_knowledge_graph tool to fetch updated graph data. Update KnowledgeGraphView component with new data. Show success message in chat. Optionally subscribe to knowledge.batch_saved event via WebSocket for real-time updates.",
+          "ecc_pattern_applied": "Event-driven refresh pattern from ECC - components react to completion events and update automatically"
+        }
+      ],
+      "acceptance_criteria": [
+        "/summarize command extracts knowledge points from current session",
+        "KnowledgeConfirmDialog displays entities and relations in editable format",
+        "User can edit, delete, or add entities before confirmation",
+        "knowledge/confirm_batch saves all entities and relations atomically",
+        "Knowledge graph visualization refreshes automatically after save"
+      ]
+    },
+    {
+      "phase_number": 3,
+      "phase_name": "Knowledge Graph Enhancement",
+      "priority": "中",
+      "estimated_hours": 12,
+      "tasks": [
+        {
+          "task_name": "Fix ui_knowledge_graph demo data fallback logic",
+          "files_to_modify": [
+            "mcp-server/src/tools/ui_knowledge_graph.py"
+          ],
+          "implementation_details": "Update generate_knowledge_graph_ui to check if real data exists before falling back to demo data. Query PostgreSQL knowledge graph via memory_manager first. Only use demo data if query returns empty result AND explicitly requested. Add parameter use_demo_data (default false).",
+          "ecc_pattern_applied": "Fail-safe pattern with explicit control - demo data as last resort, not default behavior"
+        },
+        {
+          "task_name": "Implement knowledge graph interaction features",
+          "files_to_modify": [
+            "client/frontend/src/components/KnowledgeGraphView.tsx"
+          ],
+          "implementation_details": "Add D3.js event handlers for node click (show details panel), node drag (reposition), and zoom/pan. Implement node filtering by type (Framework, Concept, Tool). Add search box to highlight nodes by name. Implement edge highlighting on hover. Add legend showing node types and edge types.",
+          "ecc_pattern_applied": "Interactive exploration pattern - similar to ECC's code navigation tools"
+        },
+        {
+          "task_name": "Add knowledge point edit and delete with MRTR confirmation",
+          "files_to_modify": [
+            "client/frontend/src/components/KnowledgeGraphView.tsx",
+            "client/frontend/src/components/ConfirmDialog.tsx"
+          ],
+          "implementation_details": "Add edit button in node details panel. Call appropriate MCP tool to update entity. For delete operations, detect inputRequired meta in response. Populate pendingConfirmation state with fields from inputRequired. Show ConfirmDialog with checkboxes (confirm deletion, archive instead). On user confirmation, call tool again with request_state parameter. Handle JWT expiration (5 minutes).",
+          "ecc_pattern_applied": "MRTR (Multi Round-Trip Request) pattern - two-phase confirmation for dangerous operations with JWT validation"
+        },
+        {
+          "task_name": "Optimize knowledge graph layout algorithm",
+          "files_to_modify": [
+            "client/frontend/src/components/KnowledgeGraphView.tsx"
+          ],
+          "implementation_details": "Fine-tune D3.js force simulation parameters (linkDistance, chargeStrength, collisionRadius). Implement clustering by node type. Add option to switch between force-directed and hierarchical layouts. Implement performance optimizations for large graphs (node culling, level-of-detail rendering).",
+          "ecc_pattern_applied": "Performance optimization pattern - similar to ECC's model selection strategy (use efficient algorithms for appropriate scale)"
+        }
+      ],
+      "acceptance_criteria": [
+        "ui_knowledge_graph returns real PostgreSQL data when available",
+        "Users can click nodes to see details and edit",
+        "Delete operations trigger MRTR confirmation dialog",
+        "Graph supports filtering, search, and zoom/pan",
+        "Graph layout is readable for up to 100 nodes"
+      ]
+    },
+    {
+      "phase_number": 4,
+      "phase_name": "Skill Encapsulation (Optional)",
+      "priority": "低",
+      "estimated_hours": 10,
+      "tasks": [
+        {
+          "task_name": "Create /summarize-knowledge skill definition",
+          "files_to_modify": [
+            "mcp-server/skills/summarize-knowledge.json"
+          ],
+          "implementation_details": "Create skill JSON file defining: name (summarize-knowledge), description (Extract structured knowledge from current session with user confirmation), trigger_conditions (slash command /summarize or keywords like summarize, organize knowledge), workflow_steps (Extract via knowledge/summarize, Preview in dialog, WAIT for user CONFIRM, Save via knowledge/confirm_batch, Refresh visualization), quality_gates (min_entities > 0, user must explicitly confirm, each entity must have valid name and observations).",
+          "ecc_pattern_applied": "Skill definition pattern from ECC - encapsulate complete workflow with clear trigger conditions and quality gates"
+        },
+        {
+          "task_name": "Implement skill router with LLM integration",
+          "files_to_modify": [
+            "mcp-server/src/agents/skill_router.py",
+            "mcp-server/server.py"
+          ],
+          "implementation_details": "Create SkillRouter class that uses LLM to understand user intent and route to appropriate skill. Implement skill matching based on trigger conditions. Add tool calling capability to LLM (function calling API). Route natural language inputs (e.g., please summarize what we discussed) to summarize-knowledge skill. Return structured response indicating which skill should be executed.",
+          "ecc_pattern_applied": "Intent-based routing pattern from ECC - system automatically identifies user intent and calls appropriate skill"
+        },
+        {
+          "task_name": "Create frontend SkillSelector component",
+          "files_to_modify": [
+            "client/frontend/src/components/SkillSelector.tsx"
+          ],
+          "implementation_details": "Create component showing available skills as cards. Display skill name, description, and trigger keywords. Add search/filter functionality. Clicking a skill inserts its slash command into chat input. Show recently used skills at top. Accessible via button in ChatInterface toolbar.",
+          "ecc_pattern_applied": "Discoverability pattern from ECC - users can browse and discover available skills"
+        },
+        {
+          "task_name": "Integrate natural language skill triggering in ChatInterface",
+          "files_to_modify": [
+            "client/frontend/src/components/ChatInterface.tsx"
+          ],
+          "implementation_details": "Before calling chat tool, first call skill_router to check if input matches any skill trigger conditions. If match found, execute skill instead of regular chat. If no match, proceed with normal chat. Show skill execution status in chat (e.g., Executing skill: summarize-knowledge...). Handle skill execution errors gracefully.",
+          "ecc_pattern_applied": "Automatic skill invocation pattern from ECC - skills can be triggered explicitly (slash command) or implicitly (natural language)"
+        }
+      ],
+      "acceptance_criteria": [
+        "Skill definition file exists with complete workflow specification",
+        "Natural language inputs like summarize our discussion trigger summarize-knowledge skill",
+        "SkillSelector shows all available skills with descriptions",
+        "Skill execution status is visible in chat interface",
+        "Skill execution errors are handled with clear messages"
+      ]
+    }
+  ],
+  "testing_strategy": {
+    "unit_tests": [
+      "Frontend: KnowledgeConfirmDialog component renders entities and relations correctly",
+      "Frontend: appStore pendingKnowledge state updates trigger dialog display",
+      "Frontend: mcpClient.parseResponse correctly extracts _meta from nested responses",
+      "Backend: knowledge/summarize tool calls LLM and returns structured JSON",
+      "Backend: knowledge/confirm_batch tool saves entities and relations atomically",
+      "Backend: KnowledgeExtractor agent correctly parses session history"
+    ],
+    "integration_tests": [
+      "WebSocket: client can call knowledge/summarize and receive structured response",
+      "WebSocket: client can call knowledge/confirm_batch and receive success confirmation",
+      "MCP: tool call chain chat -> summarize -> confirm -> ui_knowledge_graph works end-to-end",
+      "Knowledge graph: data flows correctly from PostgreSQL -> MCP -> WebSocket -> React",
+      "Cache: knowledge updates invalidate related caches automatically",
+      "MRTR: delete_knowledge first call returns inputRequired, second call with request_state succeeds"
+    ],
+    "e2e_scenarios": [
+      "User sends /summarize command -> system extracts knowledge points -> user confirms in dialog -> knowledge graph updates",
+      "User clicks knowledge graph node -> details panel appears -> user edits entity -> changes are saved -> graph refreshes",
+      "User deletes knowledge point -> MRTR confirmation dialog appears -> user confirms -> deletion succeeds -> graph refreshes",
+      "User refreshes page -> sessionId is restored from localStorage -> chat history is recovered",
+      "WebSocket disconnects -> reconnection occurs automatically -> pending requests are retried -> no data loss"
+    ]
+  },
+  "learning_concepts": [
+    {
+      "concept": "MCP Protocol and Stateless Architecture",
+      "explanation": "MCP (Model Context Protocol) is a standardized protocol for AI-external system interaction. The stateless design means all state is passed explicitly via IDs (session_id, project_id, knowledge_id) rather than relying on implicit session state. This prevents state synchronization issues in distributed systems and enables horizontal scaling.",
+      "interview_talking_points": [
+        "Explain the difference between stateless (MCP) and stateful (traditional session-based) protocols",
+        "Describe how MRTR (Multi Round-Trip Request) prevents replay attacks using JWT + Nonce",
+        "Discuss how Tasks extension enables long-running operations with progress tracking",
+        "Explain how MCP Apps (UI Templates) enable server-controlled client rendering"
+      ]
+    },
+    {
+      "concept": "RAG (Retrieval Augmented Generation) with Knowledge Graphs",
+      "explanation": "RAG combines retrieval (searching relevant knowledge) with generation (LLM creating responses). In learning-system, we use semantic search with pgvector to find relevant knowledge nodes, then pass them to LLM for contextualized responses. Knowledge graphs add structure (entities and relations) compared to flat vector stores, enabling more precise retrieval.",
+      "interview_talking_points": [
+        "Explain how embeddings and vector similarity (cosine similarity) enable semantic search",
+        "Describe the advantage of knowledge graphs over flat vector databases",
+        "Discuss how to optimize retrieval quality (chunking strategy, embedding model selection, re-ranking)",
+        "Explain how to evaluate RAG system quality (relevance, faithfulness, answer quality)"
+      ]
+    },
+    {
+      "concept": "Multi-Agent Systems and Orchestration",
+      "explanation": "A multi-agent system consists of multiple specialized AI agents that collaborate to solve complex tasks. Each agent has its own context, system prompt, and tools. In learning-system, we have agents like knowledge-organizer, quiz-generator, and progress-tracker. Agents communicate via event bus (pub-sub pattern) and can work in parallel or sequentially.",
+      "interview_talking_points": [
+        "Explain the difference between agents and tools (agents have autonomy and state, tools are stateless functions)",
+        "Describe orchestration patterns (sequential, parallel, fan-out/fan-in, feedback loops)",
+        "Discuss how to handle agent failures and implement fault tolerance",
+        "Explain the event-driven architecture (pub-sub) for agent communication"
+      ]
+    },
+    {
+      "concept": "Frontend State Management with Zustand",
+      "explanation": "Zustand is a lightweight state management library for React. Unlike Redux, it has minimal boilerplate and supports direct state mutation (via immer). We use Zustand persist middleware to save state to localStorage for session continuity. State is organized into stores (appStore for global state, domain-specific stores for features).",
+      "interview_talking_points": [
+        "Compare Zustand with Redux and Context API (pros and cons of each)",
+        "Explain state persistence strategies (localStorage, sessionStorage, IndexedDB)",
+        "Describe state synchronization challenges in distributed systems",
+        "Discuss performance optimization (selector optimization, state splitting, derived state)"
+      ]
+    },
+    {
+      "concept": "WebSocket and JSON-RPC 2.0 Protocol",
+      "explanation": "WebSocket provides full-duplex communication between client and server. We use JSON-RPC 2.0 as the message format, which defines request (method, params, id) and response (result, error, id) structure. This enables bidirectional RPC (client calling server tools and server pushing events to client).",
+      "interview_talking_points": [
+        "Explain the difference between HTTP (request-response) and WebSocket (full-duplex)",
+        "Describe reconnection strategies (exponential backoff, connection health checks)",
+        "Discuss message ordering and delivery guarantees (at-most-once, at-least-once, exactly-once)",
+        "Explain JSON-RPC 2.0 protocol and how to handle request/response matching via id field"
+      ]
+    },
+    {
+      "concept": "Test-Driven Development and Quality Gates",
+      "explanation": "TDD follows RED-GREEN-REFACTOR cycle: write failing test, implement minimal code to pass, then refactor. Quality gates are checkpoints that enforce standards (e.g., 80% test coverage, no CRITICAL issues). In ECC pattern, WAIT for user CONFIRM is a quality gate that ensures human oversight at critical decision points.",
+      "interview_talking_points": [
+        "Explain the benefits of TDD (design, documentation, confidence, refactoring safety)",
+        "Describe the testing pyramid (unit tests at bottom, E2E tests at top)",
+        "Discuss test coverage metrics (line coverage, branch coverage, mutation testing)",
+        "Explain different types of tests (unit, integration, E2E, contract testing, property-based testing)"
+      ]
+    }
+  ],
+  "risks_and_mitigations": [
+    {
+      "risk": "LLM extraction of knowledge points is inaccurate or incomplete",
+      "impact": "中",
+      "mitigation": "Implement manual confirmation step (KnowledgeConfirmDialog) where users can review and edit extracted knowledge before saving. Provide clear editing UI with inline editing, delete, and add capabilities. Include examples in LLM prompt to guide extraction quality. Log extraction results for quality monitoring and prompt tuning."
+    },
+    {
+      "risk": "Confirmation workflow is too complex and reduces user adoption",
+      "impact": "中",
+      "mitigation": "Provide quick confirm button for users who trust LLM extraction. Pre-populate dialog with extracted knowledge in clean, scannable format. Support bulk operations (select multiple entities to delete). Add keyboard shortcuts for power users. Make confirmation optional for low-risk operations (can be disabled in settings)."
+    },
+    {
+      "risk": "Knowledge graph queries become slow as data grows",
+      "impact": "高",
+      "mitigation": "Implement multi-level caching (Redis for shared cache, in-memory for session cache). Add database indexes on frequently queried fields (entity name, type, project_id). Implement pagination and lazy loading in UI (load nodes incrementally). Use database query optimization (EXPLAIN ANALYZE to identify bottlenecks). Consider graph database (Neo4j) if PostgreSQL performance is insufficient."
+    },
+    {
+      "risk": "WebSocket connection instability causes message loss",
+      "impact": "高",
+      "mitigation": "Implement automatic reconnection with exponential backoff. Queue messages in client when disconnected and flush on reconnection. Add request timeout and retry logic. Show connection status clearly in UI. Persist critical operations (knowledge saves) to localStorage before sending, clear after confirmation. Implement idempotency (tools should handle duplicate requests gracefully)."
+    },
+    {
+      "risk": "Knowledge graph visualization performance degrades with large graphs",
+      "impact": "中",
+      "mitigation": "Implement node culling (only render visible nodes). Use level-of-detail rendering (simplified nodes when zoomed out). Add virtual scrolling for node lists. Limit initial render to 100 nodes, provide Load more button. Implement graph clustering (group related nodes into meta-nodes). Use WebGL-based rendering (e.g., sigma.js) if D3.js performance is insufficient."
+    },
+    {
+      "risk": "MRTR JWT tokens expire before user completes confirmation",
+      "impact": "低",
+      "mitigation": "Set reasonable JWT expiration time (5 minutes). Show countdown timer in confirmation dialog. Auto-refresh JWT if user is still active (detected via mouse movement). Allow user to retry operation if JWT expires (re-call tool to get new JWT). Store operation context in client state so re-call can use same parameters."
+    }
+  ]
+}

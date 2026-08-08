@@ -8,6 +8,7 @@ import json
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 
@@ -88,6 +89,15 @@ class HTTPTransport:
         self.mcp_server = mcp_server
         self.app = FastAPI(title="MCP 2026 HTTP Server")
 
+        # Add CORS middleware
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React 和 Vite 默认端口
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
         # Register routes
         self._register_routes()
 
@@ -155,13 +165,26 @@ class HTTPTransport:
                     )
 
                 # Build response
-                response = MCPResponse(
-                    id=mcp_request.id,
-                    result=result.data if hasattr(result, "data") else result,
-                    meta=result.meta if hasattr(result, "meta") else {}
-                )
-
-                return JSONResponse(content=response.to_dict())
+                # Handle different result types
+                if hasattr(result, 'to_jsonrpc'):
+                    # MCPResult, TaskHandleResult, InputRequiredResult, UITemplateResult
+                    return JSONResponse(content=result.to_jsonrpc(mcp_request.id))
+                elif isinstance(result, dict):
+                    # Plain dict response (from list/read operations)
+                    response = MCPResponse(
+                        id=mcp_request.id,
+                        result=result,
+                        meta={}
+                    )
+                    return JSONResponse(content=response.to_dict())
+                else:
+                    # Fallback for other types
+                    response = MCPResponse(
+                        id=mcp_request.id,
+                        result=result if result is not None else {},
+                        meta={}
+                    )
+                    return JSONResponse(content=response.to_dict())
 
             except Exception as e:
                 logger.error(f"Request handling error: {e}", exc_info=True)
@@ -204,10 +227,14 @@ class HTTPTransport:
 
         handler = tool_info["handler"]
 
-        # Call tool
-        result = await handler(**tool_params)
-
-        return result
+        # Call tool with exception handling
+        try:
+            result = await handler(**tool_params)
+            return result
+        except Exception as e:
+            # Tool execution failed - log and re-raise
+            logger.error(f"Tool '{tool_name}' execution failed: {e}", exc_info=True)
+            raise
 
     async def _handle_resources_list(self) -> Dict[str, Any]:
         """Handle resources/list request"""

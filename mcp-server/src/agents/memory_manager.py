@@ -1,35 +1,55 @@
 """
 Memory Manager Agent
-Manages knowledge storage and retrieval using Memory MCP Server
+Manages knowledge storage and retrieval using PostgreSQL/Local KG
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
 from loguru import logger
 
 from .base_agent import BaseAgent
 from ..storage.mcp_memory_adapter import MCPMemoryAdapter
+from ..storage.postgres_knowledge_graph import PostgresKnowledgeGraph
+from ..storage.local_knowledge_graph import LocalKnowledgeGraph
 
 
 class MemoryManager(BaseAgent):
     """
-    Manages knowledge points and integrates with Memory MCP.
+    Manages knowledge points with multi-tier storage.
+
+    Storage Priority:
+    1. PostgresKnowledgeGraph (production)
+    2. LocalKnowledgeGraph (SQLite fallback)
+    3. MCPMemoryAdapter (MCP integration demo)
+    4. In-memory fallback
 
     Subscribes to: knowledge.extracted, project.analysis_completed
     Emits: knowledge.saved, knowledge.search_completed
-
-    Memory MCP Integration:
-    - Uses MCPMemoryAdapter for type-safe knowledge graph operations
-    - Supports entity creation, relation creation, and node search
-    - Caches search results for 1 hour (per MCP caching strategy)
     """
 
-    def __init__(self, agent_id: str, bus, mcp_tools: Optional[Dict] = None):
+    def __init__(
+        self,
+        agent_id: str,
+        bus,
+        knowledge_graph: Optional[Union[PostgresKnowledgeGraph, LocalKnowledgeGraph]] = None,
+        mcp_tools: Optional[Dict] = None,
+        local_db_path: Optional[str] = None
+    ):
         super().__init__(agent_id, bus)
-        # MCP Memory Adapter (封装所有 MCP Memory 操作)
-        self._mcp_adapter = MCPMemoryAdapter(mcp_tools or {})
-        # In-memory fallback store when MCP is unavailable
+
+        # Primary storage: PostgreSQL or Local KG
+        self._knowledge_graph = knowledge_graph
+
+        # Public accessor for graph management tools
+        self.kg_storage = knowledge_graph
+
+        # MCP Memory Adapter (for demo/visualization)
+        self._mcp_adapter = MCPMemoryAdapter(mcp_tools or {}, local_db_path=local_db_path)
+
+        # In-memory fallback store when all backends unavailable
         self._fallback_store: Dict[str, Dict[str, Any]] = {}
-        # Cache for MCP availability check
+
+        # Availability flags
+        self._kg_available: bool = knowledge_graph is not None
         self._mcp_available: Optional[bool] = None
 
     async def start(self) -> None:
@@ -40,7 +60,13 @@ class MemoryManager(BaseAgent):
 
         # Check MCP availability on startup
         self._mcp_available = self._mcp_adapter.available
-        logger.info(f"MemoryManager started, MCP available: {self._mcp_available}")
+
+        # Log storage backend status
+        if self._kg_available:
+            kg_type = type(self._knowledge_graph).__name__
+            logger.info(f"MemoryManager started with {kg_type} (primary), MCP available: {self._mcp_available}")
+        else:
+            logger.info(f"MemoryManager started with MCP only, MCP available: {self._mcp_available}")
 
     async def process_event(self, event: Dict[str, Any]) -> None:
         """
@@ -137,13 +163,13 @@ class MemoryManager(BaseAgent):
         Save knowledge points to Memory MCP as entities
 
         Args:
-            knowledge_points: List of knowledge point dictionaries
+            knowledge_points: List of knowledge point dictionaries (may contain graph_id)
 
         Returns:
             List of saved knowledge IDs
         """
-        if not self._mcp_available:
-            # Fallback to in-memory store
+        if not self._kg_available and not self._mcp_available:
+            # Fallback to in-memory store only if both backends unavailable
             return self._save_to_fallback(knowledge_points)
 
         saved_ids = []
@@ -163,7 +189,8 @@ class MemoryManager(BaseAgent):
                     f"Source: {kp.get('source', 'unknown')}",
                     f"Session: {kp.get('session_id', '')}",
                     f"Timestamp: {kp.get('timestamp', datetime.now().isoformat())}"
-                ]
+                ],
+                "graph_id": kp.get("graph_id")  # 传递 graph_id
             }
             entities.append(entity)
             saved_ids.append(kp_id)
@@ -176,33 +203,56 @@ class MemoryManager(BaseAgent):
 
     async def _create_entities(self, entities: List[Dict[str, Any]]) -> int:
         """
-        Create entities in Memory MCP
+        Create entities with automatic fallback
+
+        Priority: PostgreSQL/LocalKG -> MCP -> Memory
 
         Args:
-            entities: List of entity dictionaries
+            entities: List of entity dictionaries (may contain graph_id)
 
         Returns:
             Number of entities created
         """
-        if not self._mcp_available:
-            # Fallback: store in memory
-            for entity in entities:
-                entity_name = entity.get("name")
-                self._fallback_store[entity_name] = entity
-            return len(entities)
+        # Try knowledge graph first (PostgreSQL or SQLite)
+        if self._kg_available:
+            try:
+                if isinstance(self._knowledge_graph, PostgresKnowledgeGraph):
+                    # PostgreSQL async API
+                    count = 0
+                    for entity in entities:
+                        await self._knowledge_graph.create_entity(
+                            name=entity.get("name"),
+                            entity_type=entity.get("entityType", "Knowledge"),
+                            observations=entity.get("observations", []),
+                            metadata=entity.get("metadata"),
+                            graph_id=entity.get("graph_id")  # 传递 graph_id
+                        )
+                        count += 1
+                    logger.info(f"Created {count} entities in PostgreSQL")
+                    return count
+                else:
+                    # LocalKnowledgeGraph sync API (不支持 graph_id)
+                    count = self._knowledge_graph.create_entities(entities)
+                    logger.info(f"Created {count} entities in LocalKG")
+                    return count
+            except Exception as e:
+                logger.warning(f"Knowledge graph failed: {e}, trying MCP fallback")
 
-        try:
-            # Use adapter to create entities
-            count = await self._mcp_adapter.create_entities(entities)
-            logger.info(f"Created {count} entities via MCP Memory")
-            return count
-        except Exception as e:
-            logger.warning(f"MCP Memory failed, using fallback: {e}")
-            # Fallback on error
-            for entity in entities:
-                entity_name = entity.get("name")
-                self._fallback_store[entity_name] = entity
-            return len(entities)
+        # Fallback to MCP
+        if self._mcp_available:
+            try:
+                count = await self._mcp_adapter.create_entities(entities)
+                logger.info(f"Created {count} entities via MCP Memory")
+                return count
+            except Exception as e:
+                logger.warning(f"MCP Memory failed: {e}, using in-memory fallback")
+
+        # Final fallback: in-memory store
+        for entity in entities:
+            entity_name = entity.get("name")
+            self._fallback_store[entity_name] = entity
+        logger.info(f"Created {len(entities)} entities in fallback store")
+        return len(entities)
 
     def _save_to_fallback(self, knowledge_points: List[Dict[str, Any]]) -> List[str]:
         """Save to in-memory fallback store"""
@@ -229,7 +279,9 @@ class MemoryManager(BaseAgent):
 
     async def search_knowledge(self, query: str) -> Dict[str, Any]:
         """
-        Search knowledge using Memory MCP
+        Search knowledge with automatic fallback
+
+        Priority: PostgreSQL/LocalKG -> MCP -> Memory
 
         Args:
             query: Search query
@@ -237,38 +289,56 @@ class MemoryManager(BaseAgent):
         Returns:
             Search results with caching metadata
         """
-        if not self._mcp_available:
-            # Fallback to in-memory search
-            results = self._search_fallback(query)
-            return {
-                "nodes": results,
-                "source": "fallback",
-                "_meta": {
-                    "ttlMs": 0  # Don't cache fallback results
-                }
-            }
+        # Try knowledge graph first
+        if self._kg_available:
+            try:
+                if isinstance(self._knowledge_graph, PostgresKnowledgeGraph):
+                    # PostgreSQL semantic search
+                    results = await self._knowledge_graph.search_entities(query, limit=10)
+                    return {
+                        "nodes": results,
+                        "source": "postgres",
+                        "_meta": {
+                            "ttlMs": 3600000,  # Cache for 1 hour
+                            "cacheScope": "user"
+                        }
+                    }
+                else:
+                    # LocalKG vector/keyword search
+                    results = self._knowledge_graph.search_nodes(query, limit=10)
+                    return {
+                        "nodes": results,
+                        "source": "local_kg",
+                        "_meta": {
+                            "ttlMs": 3600000,
+                            "cacheScope": "user"
+                        }
+                    }
+            except Exception as e:
+                logger.warning(f"Knowledge graph search failed: {e}, trying MCP")
 
-        try:
-            # Use adapter to search nodes
-            nodes = await self._mcp_adapter.search_nodes(query)
-            return {
-                "nodes": nodes,
-                "source": "memory_mcp",
-                "_meta": {
-                    "ttlMs": 3600000,  # Cache for 1 hour
-                    "cacheScope": "user"
+        # Fallback to MCP
+        if self._mcp_available:
+            try:
+                nodes = await self._mcp_adapter.search_nodes(query)
+                return {
+                    "nodes": nodes,
+                    "source": "memory_mcp",
+                    "_meta": {
+                        "ttlMs": 3600000,
+                        "cacheScope": "user"
+                    }
                 }
-            }
-        except Exception as e:
-            logger.warning(f"MCP Memory search failed, using fallback: {e}")
-            # Fallback on error
-            results = self._search_fallback(query)
-            return {
-                "nodes": results,
-                "source": "fallback_error",
-                "error": str(e),
-                "_meta": {"ttlMs": 0}
-            }
+            except Exception as e:
+                logger.warning(f"MCP Memory search failed: {e}, using fallback")
+
+        # Final fallback: in-memory search
+        results = self._search_fallback(query)
+        return {
+            "nodes": results,
+            "source": "fallback",
+            "_meta": {"ttlMs": 0}
+        }
 
     def _search_fallback(self, query: str) -> List[Dict[str, Any]]:
         """Search in fallback store"""
@@ -320,6 +390,8 @@ class MemoryManager(BaseAgent):
         """
         建立知识节点之间的关系
 
+        Priority: PostgreSQL/LocalKG -> MCP -> Fail
+
         Args:
             from_node: 源节点名称
             to_node: 目标节点名称
@@ -328,23 +400,45 @@ class MemoryManager(BaseAgent):
         Returns:
             是否成功建立关系
         """
-        if not self._mcp_available:
-            logger.warning("MCP not available, cannot create relations")
-            return False
+        # Try knowledge graph first
+        if self._kg_available:
+            try:
+                if isinstance(self._knowledge_graph, PostgresKnowledgeGraph):
+                    await self._knowledge_graph.create_relation(
+                        from_entity=from_node,
+                        to_entity=to_node,
+                        relation_type=relation_type
+                    )
+                    logger.info(f"Created relation in PostgreSQL: {from_node} --{relation_type}--> {to_node}")
+                    return True
+                else:
+                    relations = [{
+                        "from": from_node,
+                        "to": to_node,
+                        "relationType": relation_type
+                    }]
+                    count = self._knowledge_graph.create_relations(relations)
+                    logger.info(f"Created {count} relation(s) in LocalKG")
+                    return count > 0
+            except Exception as e:
+                logger.warning(f"Knowledge graph relation creation failed: {e}, trying MCP")
 
-        try:
-            relations = [{
-                "from": from_node,
-                "to": to_node,
-                "relationType": relation_type
-            }]
+        # Fallback to MCP
+        if self._mcp_available:
+            try:
+                relations = [{
+                    "from": from_node,
+                    "to": to_node,
+                    "relationType": relation_type
+                }]
+                await self._mcp_adapter.create_relations(relations)
+                logger.info(f"Created relation via MCP: {from_node} --{relation_type}--> {to_node}")
+                return True
+            except Exception as e:
+                logger.error(f"MCP relation creation failed: {e}")
 
-            await self._mcp_adapter.create_relations(relations)
-            logger.info(f"Created relation: {from_node} --{relation_type}--> {to_node}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to create relation: {e}")
-            return False
+        logger.warning("All backends unavailable, cannot create relations")
+        return False
 
     async def get_knowledge_graph(
         self,
@@ -352,6 +446,8 @@ class MemoryManager(BaseAgent):
     ) -> Dict[str, Any]:
         """
         获取知识图谱（指定节点的子图或全图）
+
+        Priority: PostgreSQL/LocalKG -> MCP -> Memory
 
         Args:
             node_name: 中心节点名称（None = 全图）
@@ -362,38 +458,69 @@ class MemoryManager(BaseAgent):
                 "relations": [...]
             }
         """
-        if not self._mcp_available:
-            logger.warning("MCP not available, returning fallback data")
-            return {
-                "entities": list(self._fallback_store.values()),
-                "relations": [],
-                "source": "fallback"
-            }
+        # Try knowledge graph first
+        if self._kg_available:
+            try:
+                if isinstance(self._knowledge_graph, PostgresKnowledgeGraph):
+                    # PostgreSQL API
+                    if node_name:
+                        entity = await self._knowledge_graph.get_entity(node_name)
+                        relations = await self._knowledge_graph.get_relations(node_name)
+                        return {
+                            "entities": [entity] if entity else [],
+                            "relations": relations,
+                            "source": "postgres"
+                        }
+                    else:
+                        entities = await self._knowledge_graph.get_all_entities(limit=100)
+                        return {
+                            "entities": entities,
+                            "relations": [],  # TODO: fetch all relations
+                            "source": "postgres"
+                        }
+                else:
+                    # LocalKG API
+                    if node_name:
+                        nodes = self._knowledge_graph.open_nodes([node_name])
+                        return {
+                            "entities": nodes,
+                            "relations": [],
+                            "source": "local_kg"
+                        }
+                    else:
+                        graph = self._knowledge_graph.read_graph()
+                        return {
+                            **graph,
+                            "source": "local_kg"
+                        }
+            except Exception as e:
+                logger.warning(f"Knowledge graph read failed: {e}, trying MCP")
 
-        try:
-            if node_name:
-                # 获取特定节点及其关系
-                nodes = await self._mcp_adapter.open_nodes([node_name])
-                return {
-                    "entities": nodes,
-                    "relations": self._extract_relations(nodes),
-                    "source": "memory_mcp"
-                }
-            else:
-                # 获取完整图谱
-                graph = await self._mcp_adapter.read_graph()
-                return {
-                    **graph,
-                    "source": "memory_mcp"
-                }
-        except Exception as e:
-            logger.error(f"Failed to get knowledge graph: {e}")
-            return {
-                "entities": list(self._fallback_store.values()),
-                "relations": [],
-                "source": "fallback_error",
-                "error": str(e)
-            }
+        # Fallback to MCP
+        if self._mcp_available:
+            try:
+                if node_name:
+                    nodes = await self._mcp_adapter.open_nodes([node_name])
+                    return {
+                        "entities": nodes,
+                        "relations": self._extract_relations(nodes),
+                        "source": "memory_mcp"
+                    }
+                else:
+                    graph = await self._mcp_adapter.read_graph()
+                    return {
+                        **graph,
+                        "source": "memory_mcp"
+                    }
+            except Exception as e:
+                logger.warning(f"MCP graph read failed: {e}")
+
+        # Final fallback
+        return {
+            "entities": list(self._fallback_store.values()),
+            "relations": [],
+            "source": "fallback"
+        }
 
     def _extract_relations(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """从节点数据中提取关系列表"""
@@ -407,3 +534,38 @@ class MemoryManager(BaseAgent):
                     "type": rel.get("type")
                 })
         return relations
+
+    async def delete_nodes(self, node_ids: List[str]) -> int:
+        """
+        删除知识节点
+
+        Args:
+            node_ids: 要删除的节点ID列表
+
+        Returns:
+            成功删除的节点数量
+        """
+        if not self._mcp_available:
+            # Fallback: 从内存中删除
+            deleted_count = 0
+            for node_id in node_ids:
+                if node_id in self._fallback_store:
+                    del self._fallback_store[node_id]
+                    deleted_count += 1
+            logger.info(f"从 fallback store 删除了 {deleted_count} 个节点")
+            return deleted_count
+
+        try:
+            # 调用 MCP Memory 删除
+            await self._mcp_adapter.delete_entities(node_ids)
+            logger.info(f"通过 MCP Memory 删除了 {len(node_ids)} 个节点")
+            return len(node_ids)
+        except Exception as e:
+            logger.error(f"删除节点失败: {e}")
+            # Fallback 删除
+            deleted_count = 0
+            for node_id in node_ids:
+                if node_id in self._fallback_store:
+                    del self._fallback_store[node_id]
+                    deleted_count += 1
+            return deleted_count
